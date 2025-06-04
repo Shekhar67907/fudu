@@ -66,9 +66,9 @@ ALTER TABLE contact_lens_payments ADD CONSTRAINT fk_contact_lens_payment
 -- Date: 2025-06-01
 
 -- STEP 1: Add new text columns to contact_lens_prescriptions table
-ALTER TABLE contact_lens_prescriptions ADD COLUMN IF NOT EXISTS material TEXT;
-ALTER TABLE contact_lens_prescriptions ADD COLUMN IF NOT EXISTS dispose TEXT;
-ALTER TABLE contact_lens_prescriptions ADD COLUMN IF NOT EXISTS brand TEXT;
+-- ALTER TABLE contact_lens_prescriptions ADD COLUMN IF NOT EXISTS material TEXT;
+-- ALTER TABLE contact_lens_prescriptions ADD COLUMN IF NOT EXISTS dispose TEXT;
+-- ALTER TABLE contact_lens_prescriptions ADD COLUMN IF NOT EXISTS brand TEXT;
 
 -- STEP 2: Prepare contact_lens_items table for direct text fields
 -- Remove foreign key constraints if they exist

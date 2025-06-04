@@ -89,8 +89,8 @@ CREATE TABLE IF NOT EXISTS contact_lens_eyes (
       UNIQUE (contact_lens_prescription_id, eye_side),
       
     -- Ensure eye_side is only 'Left' or 'Right'
-    CONSTRAINT check_eye_side 
-      CHECK (eye_side IN ('Left', 'Right'))
+    -- CONSTRAINT check_eye_side 
+    --   CHECK (eye_side IN ('Left', 'Right'))
 );
 
 -- Contact lens product items
@@ -139,8 +139,8 @@ CREATE TABLE IF NOT EXISTS contact_lens_items (
       ON DELETE SET NULL,
       
     -- Ensure eye_side is only 'Left', 'Right' or 'Both'
-    CONSTRAINT check_item_eye_side 
-      CHECK (eye_side IN ('Left', 'Right', 'Both'))
+    -- CONSTRAINT check_item_eye_side 
+    --   CHECK (eye_side IN ('Left', 'Right', 'Both'))
 );
 
 -- Contact lens payments
