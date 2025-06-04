@@ -1330,9 +1330,9 @@ export const getDetailedContactLensData = async (contactLensPrescriptionId: stri
       const normalizedEyeSide = String(item.eye_side).toLowerCase().trim();
       let sideValue = '';
       
-      if (normalizedEyeSide === 'right' || normalizedEyeSide === 'r' || normalizedEyeSide === 're' || normalizedEyeSide === 'od') {
+      if (['right', 'r', 're', 'od'].includes(normalizedEyeSide)) {
         sideValue = 'RE';
-      } else if (normalizedEyeSide === 'left' || normalizedEyeSide === 'l' || normalizedEyeSide === 'le' || normalizedEyeSide === 'os') {
+      } else if (['left', 'l', 'le', 'os'].includes(normalizedEyeSide)) {
         sideValue = 'LE';
       }
       
