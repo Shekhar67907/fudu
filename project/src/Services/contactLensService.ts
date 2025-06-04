@@ -491,8 +491,18 @@ export const saveContactLensPrescription = async (data: ContactLensData): Promis
       parseFloat((data.payment.cheque_advance || 0).toString())
     );
     
-    // Ensure payment_total is the amount AFTER discount
-    const paymentTotal = parseFloat((data.payment.payment_total || 0).toString());
+    // Calculate payment_total from items (sum of quantity * rate)
+    let paymentTotal = 0;
+    if (data.items && data.items.length > 0) {
+      paymentTotal = data.items.reduce((total, item) => {
+        const qty = parseFloat(item.quantity?.toString() || '0');
+        const rate = parseFloat(item.rate?.toString() || '0');
+        return total + (qty * rate);
+      }, 0);
+    } else {
+      // Fallback to the existing payment_total if no items
+      paymentTotal = parseFloat((data.payment.payment_total || 0).toString());
+    }
     
     // Log the UI values we're getting
     console.log('SAVING - UI VALUES BEFORE PROCESSING:', {
@@ -890,12 +900,18 @@ export const updateContactLensPrescription = async (prescriptionId: string, data
     const originalEstimate = data.payment.estimate || 0;
     const effectiveEstimate = Math.max(0, originalEstimate - discountAmount);
     
+    // Calculate the total payment from items
+    const paymentTotal = data.items.reduce((total, item) => {
+      return total + (item.quantity || 0) * (item.rate || 0);
+    }, 0);
+    
     // Use upsert instead of update to avoid CORS issues
     const { error: paymentError } = await supabase
       .from('contact_lens_payments')
       .upsert({
         id: existingPayment.id, // Include the ID to ensure we update existing record
         contact_lens_prescription_id: prescriptionId,
+        payment_total: paymentTotal, // Set the payment_total from items
         estimate: effectiveEstimate, // Use adjusted estimate that accounts for discount
         advance: data.payment.advance,
         payment_mode: data.payment.payment_mode,
