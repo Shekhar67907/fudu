@@ -632,122 +632,6 @@ GRANT USAGE ON SCHEMA "public" TO "service_role";
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 GRANT ALL ON FUNCTION "public"."prevent_duplicate_prescription_remarks"() TO "anon";
 GRANT ALL ON FUNCTION "public"."prevent_duplicate_prescription_remarks"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."prevent_duplicate_prescription_remarks"() TO "service_role";
@@ -837,20 +721,6 @@ GRANT ALL ON FUNCTION "public"."uuid_ns_x500"() TO "service_role";
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 GRANT ALL ON TABLE "public"."contact_lens_eyes" TO "anon";
 GRANT ALL ON TABLE "public"."contact_lens_eyes" TO "authenticated";
 GRANT ALL ON TABLE "public"."contact_lens_eyes" TO "service_role";
@@ -935,33 +805,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES  TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES  TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES  TO "service_role";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
