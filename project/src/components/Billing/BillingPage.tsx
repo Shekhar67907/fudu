@@ -437,16 +437,16 @@ const BillingPage: React.FC = () => {
   };
   
   // Payment details
-  const [estimate, setEstimate] = useState('');
-  const [schDisc, setSchDisc] = useState('');
-  const [payment, setPayment] = useState('');
-  const [tax, setTax] = useState('');
-  const [advance, setAdvance] = useState('');
-  const [balance, setBalance] = useState('');
-  const [cash, setCash] = useState('0');
-  const [ccUpiAdv, setCcUpiAdv] = useState('0');
+  const [estimate, setEstimate] = useState('0.00');
+  const [schDisc, setSchDisc] = useState('0.00');
+  const [payment, setPayment] = useState('0.00');
+  const [tax, setTax] = useState('0.00');
+  const [advance, setAdvance] = useState('0.00');
+  const [balance, setBalance] = useState('0.00');
+  const [cash, setCash] = useState('0.00');
+  const [ccUpiAdv, setCcUpiAdv] = useState('0.00');
   const [ccUpiType, setCcUpiType] = useState('');
-  const [cheque, setCheque] = useState('0');
+  const [cheque, setCheque] = useState('0.00');
   
   // Billing table state (initialized in useEffect above)
   const [discountToApply, setDiscountToApply] = useState('');
@@ -463,24 +463,137 @@ const BillingPage: React.FC = () => {
     );
   };
 
+  // Calculate item amount, tax, and discount
+  const calculateItemAmount = (item: BillingItem) => {
+    const quantity = parseFloat(item.quantity) || 0;
+    const rate = parseFloat(item.rate) || 0;
+    const taxPercent = parseFloat(item.taxPercent) || 0;
+    const discountPercent = parseFloat(item.discountPercent) || 0;
+    
+    // Calculate base amount
+    const baseAmount = quantity * rate;
+    
+    // Calculate discount amount (can be percentage or fixed)
+    let discountAmount = 0;
+    if (item.discount && parseFloat(item.discount) > 0) {
+      // Use fixed discount amount if provided
+      discountAmount = Math.min(parseFloat(item.discount), baseAmount);
+    } else if (discountPercent > 0) {
+      // Calculate discount from percentage
+      discountAmount = (baseAmount * discountPercent) / 100;
+    }
+    
+    // Calculate amount after discount
+    const amountAfterDiscount = Math.max(0, baseAmount - discountAmount);
+    
+    // Calculate tax on the discounted amount
+    const taxAmount = (amountAfterDiscount * taxPercent) / 100;
+    
+    // Final amount including tax
+    const finalAmount = amountAfterDiscount + taxAmount;
+    
+    return {
+      amount: finalAmount.toFixed(2),
+      taxAmount: taxAmount.toFixed(2),
+      discountAmount: discountAmount.toFixed(2),
+      baseAmount: baseAmount.toFixed(2)
+    };
+  };
+
   // Handle item field changes
-  const handleItemChange = (id: string, field: keyof BillingItem, value: string) => {
+  const handleItemChange = (id: string, field: string, value: string) => {
     setBillingItems(prevItems => 
       prevItems.map(item => {
         if (item.id !== id) return item;
         
         const updatedItem = { ...item, [field]: value };
         
-        // If quantity or rate changes, calculate amount
-        if ((field === 'quantity' || field === 'rate') && updatedItem.quantity && updatedItem.rate) {
-          const quantity = parseFloat(updatedItem.quantity) || 0;
-          const rate = parseFloat(updatedItem.rate) || 0;
-          updatedItem.amount = (quantity * rate).toFixed(2);
+        // Recalculate amounts when relevant fields change
+        if (['quantity', 'rate', 'taxPercent', 'discountPercent', 'discount'].includes(field)) {
+          const calculated = calculateItemAmount(updatedItem);
+          updatedItem.amount = calculated.amount;
+          
+          // Update discount amount if discount percent was changed
+          if (field === 'discountPercent' && !updatedItem.discount) {
+            updatedItem.discount = calculated.discountAmount;
+          }
         }
         
         return updatedItem;
       })
     );
+  };
+  
+  // Calculate and update totals when billing items change
+  useEffect(() => {
+    let subtotal = 0;
+    let totalTax = 0;
+    let totalDiscount = 0;
+    
+    // Calculate item totals
+    billingItems.forEach(item => {
+      const quantity = parseFloat(item.quantity) || 0;
+      const rate = parseFloat(item.rate) || 0;
+      const taxPercent = parseFloat(item.taxPercent) || 0;
+      const discount = parseFloat(item.discount) || 0;
+      
+      // Calculate base amount (quantity * rate)
+      const baseAmount = quantity * rate;
+      
+      // Calculate tax on base amount
+      const taxAmount = (baseAmount * taxPercent) / 100;
+      
+      // Add to totals
+      subtotal += baseAmount;  // Subtotal before tax and discount
+      totalTax += taxAmount;
+      totalDiscount += discount;
+    });
+    
+    // Calculate estimate (subtotal + tax)
+    const estimate = subtotal + totalTax;
+    
+    // Calculate total after discount (apply discount to subtotal before tax)
+    const subtotalAfterDiscount = Math.max(0, subtotal - totalDiscount);
+    const totalAfterDiscount = subtotalAfterDiscount + totalTax;
+    
+    // Update payment section
+    setEstimate(estimate.toFixed(2));
+    setTax(totalTax.toFixed(2));
+    // Set scheduled amount to total discount from all items
+    setSchDisc(totalDiscount.toFixed(2));
+    
+    // Calculate balance (total after discount - payments - advances)
+    const paymentAmount = parseFloat(payment) || 0;
+    const advanceAmount = parseFloat(advance) || 0;
+    const balanceAmount = totalAfterDiscount - paymentAmount - advanceAmount;
+    
+    setBalance(Math.max(0, balanceAmount).toFixed(2)); // Ensure balance doesn't go negative
+  }, [billingItems, payment, advance]);
+
+  // Handle payment field changes
+  const handlePaymentChange = (field: string, value: string) => {
+    // Ensure the value is a valid number or empty string
+    const numValue = value === '' ? '0.00' : (isNaN(parseFloat(value)) ? '0.00' : parseFloat(value).toFixed(2));
+    
+    switch (field) {
+      case 'payment':
+        setPayment(numValue);
+        break;
+      case 'advance':
+        setAdvance(numValue);
+        break;
+      case 'cash':
+        setCash(numValue);
+        break;
+      case 'ccUpiAdv':
+        setCcUpiAdv(numValue);
+        break;
+      case 'cheque':
+        setCheque(numValue);
+        break;
+      default:
+        break;
+    }
   };
 
   // Delete selected items
@@ -1027,33 +1140,66 @@ const BillingPage: React.FC = () => {
                     <td className="border border-gray-300 px-0 py-0">
                       <input 
                         type="text" 
-                        value={item.rate} 
-                        onChange={(e) => handleItemChange(item.id, 'rate', e.target.value)}
+                        value={parseFloat(item.rate).toFixed(2)} 
+                        onChange={(e) => {
+                          // Allow only numbers and one decimal point
+                          const value = e.target.value.replace(/[^0-9.]/g, '');
+                          const parts = value.split('.');
+                          if (parts.length <= 2) { // Only allow one decimal point
+                            handleItemChange(item.id, 'rate', value);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          // Format to 2 decimal places on blur
+                          const numValue = parseFloat(e.target.value) || 0;
+                          handleItemChange(item.id, 'rate', numValue.toFixed(2));
+                        }}
                         className="w-full px-1 py-1 border-0 focus:ring-0 focus:outline-none text-right"
                       />
                     </td>
                     <td className="border border-gray-300 px-0 py-0">
                       <input 
                         type="text" 
-                        value={item.taxPercent} 
-                        onChange={(e) => handleItemChange(item.id, 'taxPercent', e.target.value)}
+                        value={parseFloat(item.taxPercent).toFixed(2)} 
+                        onChange={(e) => {
+                          const value = e.target.value.replace(/[^0-9.]/g, '');
+                          const parts = value.split('.');
+                          if (parts.length <= 2) {
+                            handleItemChange(item.id, 'taxPercent', value);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const numValue = parseFloat(e.target.value) || 0;
+                          handleItemChange(item.id, 'taxPercent', numValue.toFixed(2));
+                        }}
                         className="w-full px-1 py-1 border-0 focus:ring-0 focus:outline-none text-right"
                       />
                     </td>
                     <td className="border border-gray-300 px-0 py-0">
                       <input 
                         type="text" 
-                        value={item.quantity} 
-                        onChange={(e) => handleItemChange(item.id, 'quantity', e.target.value)}
+                        value={parseFloat(item.quantity).toFixed(2)} 
+                        onChange={(e) => {
+                          // Allow only numbers and one decimal point
+                          const value = e.target.value.replace(/[^0-9.]/g, '');
+                          const parts = value.split('.');
+                          if (parts.length <= 2) { // Only allow one decimal point
+                            handleItemChange(item.id, 'quantity', value);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          // Format to 2 decimal places on blur
+                          const numValue = parseFloat(e.target.value) || 0;
+                          handleItemChange(item.id, 'quantity', numValue.toFixed(2));
+                        }}
                         className="w-full px-1 py-1 border-0 focus:ring-0 focus:outline-none text-right"
                       />
                     </td>
                     <td className="border border-gray-300 px-0 py-0">
                       <input 
                         type="text" 
-                        value={item.amount} 
-                        onChange={(e) => handleItemChange(item.id, 'amount', e.target.value)}
-                        className="w-full px-1 py-1 border-0 focus:ring-0 focus:outline-none text-right"
+                        value={parseFloat(item.amount).toFixed(2)} 
+                        className="w-full px-1 py-1 border-0 focus:ring-0 focus:outline-none text-right bg-gray-50"
                         readOnly
                       />
                     </td>
@@ -1076,16 +1222,40 @@ const BillingPage: React.FC = () => {
                     <td className="border border-gray-300 px-0 py-0">
                       <input 
                         type="text" 
-                        value={item.discount} 
-                        onChange={(e) => handleItemChange(item.id, 'discount', e.target.value)}
+                        value={parseFloat(item.discount).toFixed(2)} 
+                        onChange={(e) => {
+                          // Allow only numbers and one decimal point
+                          const value = e.target.value.replace(/[^0-9.]/g, '');
+                          const parts = value.split('.');
+                          if (parts.length <= 2) { // Only allow one decimal point
+                            handleItemChange(item.id, 'discount', value);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          // Format to 2 decimal places on blur
+                          const numValue = parseFloat(e.target.value) || 0;
+                          handleItemChange(item.id, 'discount', numValue.toFixed(2));
+                        }}
                         className="w-full px-1 py-1 border-0 focus:ring-0 focus:outline-none text-right"
                       />
                     </td>
                     <td className="border border-gray-300 px-0 py-0">
                       <input 
                         type="text" 
-                        value={item.discountPercent} 
-                        onChange={(e) => handleItemChange(item.id, 'discountPercent', e.target.value)}
+                        value={parseFloat(item.discountPercent).toFixed(2)} 
+                        onChange={(e) => {
+                          // Allow only numbers and one decimal point
+                          const value = e.target.value.replace(/[^0-9.]/g, '');
+                          const parts = value.split('.');
+                          if (parts.length <= 2) { // Only allow one decimal point
+                            handleItemChange(item.id, 'discountPercent', value);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          // Format to 2 decimal places on blur
+                          const numValue = parseFloat(e.target.value) || 0;
+                          handleItemChange(item.id, 'discountPercent', numValue.toFixed(2));
+                        }}
                         className="w-full px-1 py-1 border-0 focus:ring-0 focus:outline-none text-right"
                       />
                     </td>
@@ -1122,8 +1292,8 @@ const BillingPage: React.FC = () => {
                   type="text" 
                   className="w-full px-2 py-1 border border-gray-300 bg-[#e8e7fa] rounded-none text-right" 
                   value={estimate}
-                  onChange={(e) => setEstimate(e.target.value)}
-                  placeholder="0"
+                  readOnly
+                  placeholder="0.00"
                 />
               </div>
               <div className="w-1/6 px-1">
@@ -1133,7 +1303,7 @@ const BillingPage: React.FC = () => {
                   className="w-full px-2 py-1 border border-gray-300 bg-[#e8e7fa] rounded-none text-right" 
                   value={schDisc}
                   onChange={(e) => setSchDisc(e.target.value)}
-                  placeholder="0"
+                  placeholder="0.00"
                 />
                 <span className="text-xs text-gray-500">(Rs.)</span>
               </div>
@@ -1143,28 +1313,28 @@ const BillingPage: React.FC = () => {
                   type="text" 
                   className="w-full px-2 py-1 border border-gray-300 rounded-none text-right" 
                   value={payment}
-                  onChange={(e) => setPayment(e.target.value)}
-                  placeholder="0"
+                  onChange={(e) => handlePaymentChange('payment', e.target.value)}
+                  placeholder="0.00"
                 />
               </div>
               <div className="w-1/6 px-1">
                 <label className="block text-xs mb-1">Tax Rs.</label>
                 <input 
                   type="text" 
-                  className="w-full px-2 py-1 border border-gray-300 rounded-none text-right" 
+                  className="w-full px-2 py-1 border border-gray-300 rounded-none text-right bg-[#e8e7fa]" 
                   value={tax}
-                  onChange={(e) => setTax(e.target.value)}
-                  placeholder="0"
+                  readOnly
+                  placeholder="0.00"
                 />
               </div>
               <div className="w-1/6 px-1">
                 <label className="block text-xs mb-1">Adv.</label>
                 <input 
                   type="text" 
-                  className="w-full px-2 py-1 border border-gray-300 bg-[#e8e7fa] rounded-none text-right" 
+                  className="w-full px-2 py-1 border border-gray-300 rounded-none text-right" 
                   value={advance}
-                  onChange={(e) => setAdvance(e.target.value)}
-                  placeholder="0"
+                  onChange={(e) => handlePaymentChange('advance', e.target.value)}
+                  placeholder="0.00"
                 />
               </div>
               <div className="w-1/6 pl-1">
@@ -1173,8 +1343,8 @@ const BillingPage: React.FC = () => {
                   type="text" 
                   className="w-full px-2 py-1 border border-gray-300 bg-[#e8e7fa] rounded-none text-right" 
                   value={balance}
-                  onChange={(e) => setBalance(e.target.value)}
-                  placeholder="0"
+                  readOnly
+                  placeholder="0.00"
                 />
               </div>
             </div>
@@ -1186,8 +1356,8 @@ const BillingPage: React.FC = () => {
                   type="text" 
                   className="w-full px-2 py-1 border border-gray-300 rounded-none text-right" 
                   value={cash}
-                  onChange={(e) => setCash(e.target.value)}
-                  placeholder="0"
+                  onChange={(e) => handlePaymentChange('cash', e.target.value)}
+                  placeholder="0.00"
                 />
               </div>
               <div className="w-1/3 px-2">
@@ -1198,16 +1368,18 @@ const BillingPage: React.FC = () => {
                     value={ccUpiType}
                     onChange={(e) => setCcUpiType(e.target.value)}
                   >
-                    <option value="">Select</option>
-                    <option value="Credit Card">Credit Card</option>
+                    <option value="">Type</option>
+                    <option value="VISA">VISA</option>
+                    <option value="MasterCard">MasterCard</option>
                     <option value="UPI">UPI</option>
+                    <option value="Other">Other</option>
                   </select>
                   <input 
                     type="text" 
-                    className="w-1/2 px-2 py-1 border border-gray-300 border-l-0 rounded-none text-right" 
+                    className="w-1/2 px-2 py-1 border border-gray-300 rounded-none text-right" 
                     value={ccUpiAdv}
-                    onChange={(e) => setCcUpiAdv(e.target.value)}
-                    placeholder="0"
+                    onChange={(e) => handlePaymentChange('ccUpiAdv', e.target.value)}
+                    placeholder="0.00"
                   />
                 </div>
               </div>
@@ -1217,8 +1389,8 @@ const BillingPage: React.FC = () => {
                   type="text" 
                   className="w-full px-2 py-1 border border-gray-300 rounded-none text-right" 
                   value={cheque}
-                  onChange={(e) => setCheque(e.target.value)}
-                  placeholder="0"
+                  onChange={(e) => handlePaymentChange('cheque', e.target.value)}
+                  placeholder="0.00"
                 />
               </div>
             </div>
