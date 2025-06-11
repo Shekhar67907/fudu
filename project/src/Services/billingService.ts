@@ -1087,56 +1087,64 @@ export const getCustomerPurchaseHistory = async (mobileNo: string) => {
     let clPrescriptionsData: any[] = [];
     
     try {
-      console.log('Fetching contact lens prescriptions for mobile:', mobileNo);
+      console.log('Searching contact lens prescriptions for:', mobileNo);
       
-      // Get all contact lens prescriptions with related data in a single query
-      const { data: clPrescriptions, error: clError } = await supabase
+      // First, try to fetch by mobile number directly from contact_lens_prescriptions
+      console.log('Searching contact lens data by mobile/name:', mobileNo);
+      const { data: clBySearch, error: clSearchError } = await supabase
         .from('contact_lens_prescriptions')
-        .select('*, prescriptions!inner(*), contact_lens_items(*)')
-        .or(`prescriptions.mobile_no.ilike.%${mobileNo}%,prescriptions.phone_landline.ilike.%${mobileNo}%`)
+        .select('*, contact_lens_items(*), prescriptions(*)')
+        .or(
+          `mobile_no.ilike.%${mobileNo}%,
+          phone_landline.ilike.%${mobileNo}%,
+          name.ilike.%${mobileNo}%,
+          prescription_no.ilike.%${mobileNo}%,
+          prescriptions.prescription_no.ilike.%${mobileNo}%`
+        )
         .order('created_at', { ascending: false });
       
-      if (clError) {
-        console.error('Error fetching contact lens prescriptions:', clError);
-        throw clError;
-      }
+      console.log('Contact lens search results:', {
+        data: clBySearch,
+        error: clSearchError,
+        count: clBySearch?.length || 0
+      });
       
-      if (clPrescriptions) {
-        // Map the prescriptions data to the expected format
-        clPrescriptionsData = clPrescriptions.map(cl => ({
+      if (clBySearch && clBySearch.length > 0) {
+        clPrescriptionsData = clBySearch.map(cl => ({
           ...cl,
-          prescriptions: [cl.prescriptions],
+          prescriptions: cl.prescriptions ? [cl.prescriptions] : [],
           contact_lens_items: Array.isArray(cl.contact_lens_items) 
             ? cl.contact_lens_items 
             : []
         }));
       }
       
-      // Also fetch by prescription IDs if available
+      // Also fetch by prescription IDs from the customer's prescriptions if we have any
       customerPrescriptionIds = customerPrescriptions?.map(p => p.id) || [];
+      console.log('Customer prescription IDs for contact lens search:', customerPrescriptionIds);
+      
       if (customerPrescriptionIds.length > 0) {
-        console.log(`Found ${customerPrescriptionIds.length} prescription IDs for contact lens search`);
+        console.log(`Searching for contact lens with ${customerPrescriptionIds.length} prescription IDs`);
         
-        const { data: clPrescriptionsById, error: clByIdError } = await supabase
+        const { data: clByPrescriptionId, error: clPrescError } = await supabase
           .from('contact_lens_prescriptions')
-          .select('*, prescriptions!inner(*), contact_lens_items(*)')
+          .select('*, contact_lens_items(*), prescriptions(*)')
           .in('prescription_id', customerPrescriptionIds)
           .order('created_at', { ascending: false });
           
-        if (clByIdError) {
-          console.error('Error fetching contact lens prescriptions by ID:', clByIdError);
-          throw clByIdError;
-        }
-        
-        console.log(`Found ${clPrescriptionsById?.length || 0} contact lens prescriptions by ID`);
-        
-        if (clPrescriptionsById) {
+        console.log('Contact lens by prescription ID results:', {
+          data: clByPrescriptionId,
+          error: clPrescError,
+          count: clByPrescriptionId?.length || 0
+        });
+          
+        if (clByPrescriptionId && clByPrescriptionId.length > 0) {
           // Merge with existing data, avoiding duplicates
-          const newPrescriptions = clPrescriptionsById
+          const newPrescriptions = clByPrescriptionId
             .filter(cl => !clPrescriptionsData.some(existing => existing.id === cl.id))
             .map(cl => ({
               ...cl,
-              prescriptions: [cl.prescriptions],
+              prescriptions: cl.prescriptions ? [cl.prescriptions] : [],
               contact_lens_items: Array.isArray(cl.contact_lens_items) 
                 ? cl.contact_lens_items 
                 : []
@@ -1145,6 +1153,8 @@ export const getCustomerPurchaseHistory = async (mobileNo: string) => {
           clPrescriptionsData = [...clPrescriptionsData, ...newPrescriptions];
         }
       }
+      
+      console.log(`Total contact lens prescriptions found: ${clPrescriptionsData.length}`);
     } catch (error) {
       console.error('Error in contact lens prescription processing:', error);
       // Continue with whatever data we have if there's an error
@@ -1189,9 +1199,22 @@ export const getCustomerPurchaseHistory = async (mobileNo: string) => {
 
     // Map and combine all data
     // allItems is already declared at the top of the function
+    
+    // Filter out prescription items that shouldn't be shown as line items
+    const shouldIncludePrescription = (rx: any) => {
+      // Only include prescriptions that have actual items or are specifically marked as billable
+      return rx.items && rx.items.length > 0 || rx.is_billable === true;
+    };
+
+    // Log the raw data for debugging
+    console.log('Raw prescriptions data:', prescriptionsData);
+    console.log('Raw orders data:', ordersData);
+    console.log('Raw contact lens data:', clPrescriptionsData);
 
     // Map prescriptions with enhanced details
-    (prescriptionsData || []).forEach((rx: Prescription) => {
+    (prescriptionsData || [])
+      .filter(shouldIncludePrescription)
+      .forEach((rx: Prescription) => {
       try {
         const rxDate = rx.date ? new Date(rx.date) : new Date();
         const prescriptionDetails = formatPrescriptionDetails(rx);
@@ -1268,50 +1291,65 @@ export const getCustomerPurchaseHistory = async (mobileNo: string) => {
     };
 
     // Map orders with enhanced details
-    // Use the already declared customerPrescriptionIds
-    (ordersData || []).forEach((prescription: any) => {
+    console.log('Processing orders data, count:', (ordersData || []).length);
+    (ordersData || []).forEach((prescription: any, index: number) => {
+      console.log(`Processing order ${index + 1}:`, prescription);
       if (prescription.orders && Array.isArray(prescription.orders)) {
         prescription.orders.forEach((order: any) => {
-          if (order.order_items && Array.isArray(order.order_items)) {
-            order.order_items.forEach((item: any) => {
-              try {
-                const orderDate = order.order_date ? new Date(order.order_date) : new Date();
-                const itemDetails = formatOrderItemDetails(item);
-                const itemName = [
-                  item.item_name,
-                  item.brand_name && `(${item.brand_name})`,
-                  item.lens_type && `[${item.lens_type}]`
-                ].filter(Boolean).join(' ');
-                
-                allItems.push({
-                  id: `order_${order.id || 'unknown'}_${item.id || 'item'}`,
-                  type: 'order',
-                  item_type: item.item_type || 'other',
-                  date: order.order_date || new Date().toISOString(),
-                  dateFormatted: orderDate.toLocaleDateString(),
-                  referenceNo: order.order_no || `ORDER-${Date.now()}`,
-                  item_name: itemName || 'Unnamed Item',
-                  item_code: item.item_code || `${item.item_type?.toUpperCase().substring(0, 3) || 'ITM'}-${item.id || 'UNK'}`,
-                  item_details: itemDetails,
-                  quantity: Number(item.qty) || 1,
-                  rate: Number(item.rate) || 0,
-                  amount: Number(item.amount) || 0,
-                  balance_amount: 0,
-                  discount_percent: Number(item.discount_percent) || 0,
-                  discount_amount: Number(item.discount_amount) || 0,
-                  tax_percent: Number(item.tax_percent) || 0,
-                  status: order.status,
-                  delivery_date: order.delivery_date,
-                  remarks: order.remarks,
-                  _originalPurchase: order,
-                  _originalItem: item,
-                  _prescriptionNo: prescription.prescription_no
-                });
-              } catch (error) {
-                console.error('Error processing order item:', item, error);
-              }
-            });
+          if (!order || !order.order_items || !Array.isArray(order.order_items)) {
+            console.warn('Order missing items or items not an array:', order);
+            return;
           }
+          
+          order.order_items.forEach((item: any) => {
+            try {
+              if (!item) {
+                console.warn('Skipping null/undefined order item');
+                return;
+              }
+              
+              const orderDate = order.order_date ? new Date(order.order_date) : new Date();
+              const itemDetails = formatOrderItemDetails(item);
+              const itemName = [
+                item.item_name || 'Unnamed Item',
+                item.brand_name && `(${item.brand_name})`,
+                item.lens_type && `[${item.lens_type}]`
+              ].filter(Boolean).join(' ').trim();
+              
+              // Skip items with no name and no details
+              if (!itemName && !itemDetails) {
+                console.warn('Skipping item with no name or details:', item);
+                return;
+              }
+              
+              allItems.push({
+                id: `order_${order.id || 'unknown'}_${item.id || Date.now()}`,
+                type: 'order',
+                item_type: item.item_type || 'other',
+                date: order.order_date || new Date().toISOString(),
+                dateFormatted: orderDate.toLocaleDateString(),
+                referenceNo: order.order_no || `ORDER-${Date.now()}`,
+                item_name: itemName || 'Unnamed Item',
+                item_code: item.item_code || `${item.item_type?.toUpperCase().substring(0, 3) || 'ITM'}-${item.id || 'UNK'}`,
+                item_details: itemDetails,
+                quantity: Number(item.qty) || 1,
+                rate: Number(item.rate) || 0,
+                amount: Number(item.amount) || 0,
+                balance_amount: 0,
+                discount_percent: Number(item.discount_percent) || 0,
+                discount_amount: Number(item.discount_amount) || 0,
+                tax_percent: Number(item.tax_percent) || 0,
+                status: order.status,
+                delivery_date: order.delivery_date,
+                remarks: order.remarks,
+                _originalPurchase: order,
+                _originalItem: item,
+                _prescriptionNo: prescription.prescription_no
+              });
+            } catch (error) {
+              console.error('Error processing order item:', item, error);
+            }
+          });
         });
       }
     });
@@ -1349,21 +1387,43 @@ export const getCustomerPurchaseHistory = async (mobileNo: string) => {
     };
 
     // Map contact lens prescriptions with enhanced details
-    (clPrescriptionsData || []).forEach((cl: any) => {
+    console.log('Processing contact lens data, count:', (clPrescriptionsData || []).length);
+    (clPrescriptionsData || []).forEach((cl: any, index: number) => {
+      console.log(`Processing contact lens ${index + 1}:`, cl);
       try {
-        if (!cl.contact_lens_items || !Array.isArray(cl.contact_lens_items)) {
+        if (!cl) {
+          console.warn('Skipping null/undefined contact lens prescription');
+          return;
+        }
+        
+        const prescription = (Array.isArray(cl.prescriptions) ? cl.prescriptions[0] : cl.prescriptions) || {};
+        const prescriptionNo = cl.prescription_no || prescription.prescription_no || `CL-${Date.now()}`;
+        const itemDate = cl.created_at ? new Date(cl.created_at) : new Date();
+        
+        // Ensure contact_lens_items is an array
+        const contactLensItems = Array.isArray(cl.contact_lens_items) 
+          ? cl.contact_lens_items 
+          : [];
+          
+        if (contactLensItems.length === 0) {
           console.warn('No contact lens items found for prescription:', cl.id);
           return;
         }
         
-        const prescription = cl.prescriptions?.[0] || {};
-        const prescriptionNo = cl.prescription_no || prescription.prescription_no || `CL-${Date.now()}`;
-        const itemDate = cl.created_at ? new Date(cl.created_at) : new Date();
-        
-        cl.contact_lens_items.forEach((item: any) => {
+        contactLensItems.forEach((item: any, itemIndex: number) => {
           try {
-            const eyeSide = item.eye_side === 'Right' ? 'RE' : item.eye_side === 'Left' ? 'LE' : '';
+            if (!item) {
+              console.warn(`Skipping null/undefined item at index ${itemIndex}`);
+              return;
+            }
+            
+            // Map eye side from database format to UI format
+            const eyeSide = item.eye_side === 'Right' ? 'RE' : 
+                           item.eye_side === 'Left' ? 'LE' : '';
+                           
             const itemDetails = formatContactLensDetails(item);
+            
+            // Build item name with all available details
             const itemName = [
               item.brand || 'Contact Lens',
               item.material,
@@ -1371,14 +1431,19 @@ export const getCustomerPurchaseHistory = async (mobileNo: string) => {
               eyeSide ? `[${eyeSide}]` : ''
             ].filter(Boolean).join(' ').trim();
             
+            if (!itemName) {
+              console.warn('Skipping item with empty name:', item);
+              return;
+            }
+            
             allItems.push({
-              id: `cl_${cl.id || 'unknown'}_${item.id || 'item'}`,
+              id: `cl_${cl.id || 'unknown'}_${item.id || `item_${Date.now()}_${itemIndex}`}`,
               type: 'contact_lens',
               date: cl.created_at || new Date().toISOString(),
               dateFormatted: itemDate.toLocaleDateString(),
               referenceNo: prescriptionNo,
               item_name: itemName,
-              item_code: `CL-${item.brand?.substring(0, 3).toUpperCase() || 'LENS'}`,
+              item_code: item.item_code || `CL-${item.brand?.substring(0, 3).toUpperCase() || 'LENS'}`,
               item_details: itemDetails,
               quantity: Number(item.quantity) || 1,
               rate: Number(item.rate) || 0,

@@ -62,7 +62,7 @@ const BillingPage: React.FC = () => {
   const [isCash, setIsCash] = useState(false);
   
   // Customer data and purchase history
-  const [customerPurchaseHistory, setCustomerPurchaseHistory] = useState<PurchaseHistory[]>([]);
+  const [customerPurchaseHistory, setCustomerPurchaseHistory] = useState<Array<PurchaseHistory & { [key: string]: any }>>([]);
   const [isLoadingCustomer, setIsLoadingCustomer] = useState(false);
   
   // Billing items state
@@ -88,20 +88,26 @@ const BillingPage: React.FC = () => {
       setState('');
       setPin('');
       setAge('');
-      setBillingItems([1, 2, 3].map(id => ({
-        id: id.toString(),
-        selected: false,
-        itemCode: '',
-        itemName: '',
-        orderNo: '',
-        rate: '0',
-        taxPercent: '0',
-        quantity: '1',
-        amount: '0',
-        discount: '0',
-        discountPercent: '0',
-        _originalPurchase: null
-      })));
+      
+      // Start with empty billing items
+      setBillingItems([]);
+      console.log('Cleared previous billing items');
+      
+      // TEMP: Don't set any default billing items yet
+      // setBillingItems([1, 2, 3].map(id => ({
+      //   id: id.toString(),
+      //   selected: false,
+      //   itemCode: '',
+      //   itemName: '',
+      //   orderNo: '',
+      //   rate: '0',
+      //   taxPercent: '0',
+      //   quantity: '1',
+      //   amount: '0',
+      //   discount: '0',
+      //   discountPercent: '0',
+      //   _originalPurchase: null
+      // })));
       
       // Fetch full customer details from their original table
       console.log('Fetching detailed customer data...');
@@ -144,16 +150,72 @@ const BillingPage: React.FC = () => {
         setAge(customerData.age.toString());
       }
       
-      // Get purchase history for this customer's mobile number
+      // Get purchase history for the customer
       console.log('Fetching purchase history for mobile:', mobileNo);
-      const history = await getCustomerPurchaseHistory(mobileNo);
-      console.log('Purchase history:', history);
+      const purchaseHistoryResponse = await getCustomerPurchaseHistory(mobileNo);
       
-      // Set customer purchase history for the history table
-      setCustomerPurchaseHistory(history);
+      // Ensure we have an array of purchase history items and filter out non-billable items
+      let purchaseHistoryItems: Array<PurchaseHistory & { [key: string]: any }> = [];
+      
+      // Helper function to determine if an item should be included
+      const shouldIncludeItem = (item: any) => {
+        // Always include orders
+        if (item.type === 'order') return true;
+        
+        // Only include prescriptions that have actual billable content
+        if (item.type === 'prescription') {
+          // Exclude system prescriptions like 'Eye Examination'
+          if (item.item_name === 'Eye Examination') return false;
+          
+          // Include prescriptions that have items or are marked as billable
+          return (item.items && item.items.length > 0) || 
+                 item.is_billable === true ||
+                 (item.item_name && item.item_name.trim() !== '');
+        }
+        
+        // Include contact lens items by default
+        if (item.type === 'contact_lens') return true;
+        
+        // Default to excluding anything else
+        return false;
+      };
+      
+      if (Array.isArray(purchaseHistoryResponse)) {
+        purchaseHistoryItems = purchaseHistoryResponse.filter(shouldIncludeItem);
+      } else if (purchaseHistoryResponse && typeof purchaseHistoryResponse === 'object') {
+        if (shouldIncludeItem(purchaseHistoryResponse)) {
+          purchaseHistoryItems = [purchaseHistoryResponse];
+        }
+      }
+      
+      console.log('Filtered purchase history items:', purchaseHistoryItems);
+      
+      console.log('Raw purchase history data:', {
+        data: purchaseHistoryItems,
+        count: purchaseHistoryItems.length
+      });
+      
+      // Log details of each item
+      purchaseHistoryItems.forEach((item, index) => {
+        console.log(`Purchase history item ${index + 1}:`, {
+          id: item.id,
+          type: item.type,
+          item_name: item.item_name,
+          item_code: item.item_code,
+          quantity: item.quantity,
+          amount: item.amount,
+          date: item.date,
+          _originalItem: item._originalItem,
+          _originalPurchase: item._originalPurchase
+        });
+      });
+      
+      // Update state with the purchase history items
+      console.log('Setting purchase history with items:', purchaseHistoryItems.length);
+      setCustomerPurchaseHistory(purchaseHistoryItems);
       
       // Auto-populate billing items with recent purchases
-      if (history.length > 0) {
+      if (purchaseHistoryItems.length > 0) {
         console.log('Populating billing items with history');
         try {
           const populatedItems = [];
@@ -161,7 +223,7 @@ const BillingPage: React.FC = () => {
           const maxItems = 3; // Maximum number of items to show initially
           
           // Process each history item
-          for (const purchase of history) {
+          for (const purchase of purchaseHistoryItems) {
             if (itemCount >= maxItems) break;
             
             console.log(`Processing purchase:`, purchase);
