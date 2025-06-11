@@ -381,10 +381,58 @@ export const getOrderById = async (orderId: string) => {
   }
 };
 
+// Check if a prescription or reference number already exists in the database
+const checkNumberExists = async (type: 'prescription' | 'reference', number: string): Promise<boolean> => {
+  if (!number) return false;
+  
+  try {
+    const { data, error } = await supabase
+      .from('prescriptions')
+      .select('id')
+      .eq(type === 'prescription' ? 'prescription_no' : 'reference_no', number)
+      .maybeSingle();
+
+    if (error) throw error;
+    return !!data;
+  } catch (error) {
+    console.error(`Error checking ${type} number:`, error);
+    throw error;
+  }
+};
+
+// Generate a unique prescription number with retry mechanism
+const generateUniquePrescriptionNumber = async (maxRetries = 3): Promise<string> => {
+  const now = new Date();
+  const year = now.getFullYear().toString().substring(2);
+  const month = (now.getMonth() + 1).toString().padStart(2, '0');
+  const day = now.getDate().toString().padStart(2, '0');
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    // Generate a random 4-digit number
+    const random = Math.floor(1000 + Math.random() * 9000);
+    const prescriptionNo = `P${year}${month}-${day}${random}`;
+    
+    try {
+      const exists = await checkNumberExists('prescription', prescriptionNo);
+      if (!exists) {
+        return prescriptionNo;
+      }
+    } catch (error) {
+      console.error(`Attempt ${attempt}: Error generating prescription number:`, error);
+      if (attempt === maxRetries) throw error;
+    }
+  }
+  
+  // Fallback to timestamp if all retries fail
+  return `P${now.getTime().toString().slice(-10)}`;
+};
+
 export const orderService = {
   saveOrder,
   getOrdersByPrescriptionId,
   getOrderById,
+  checkNumberExists,
+  generateUniquePrescriptionNumber,
   generateOrderNo,
   generateBillNo
 };

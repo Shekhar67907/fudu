@@ -1,29 +1,25 @@
 /**
- * Generates a unique prescription number in the format P2324-XXXXX
- * Uses fiscal year plus timestamp for guaranteed uniqueness
+ * Generates a unique prescription number in the format PYYMM-DDRRRR
+ * Where:
+ * P: Literal 'P' prefix
+ * YY: Last two digits of current year
+ * MM: Month (01-12)
+ * DD: Day of month (01-31)
+ * RRRR: 4 random digits (0000-9999)
  */
 export const generatePrescriptionNo = (): string => {
-  // Get current date to determine fiscal year
   const now = new Date();
-  const currentMonth = now.getMonth() + 1; // JavaScript months are 0-indexed
-  const currentYear = now.getFullYear();
   
-  // Determine fiscal year (April to March)
-  // If current month is January to March, fiscal year is previous year to current year
-  // Otherwise, fiscal year is current year to next year
-  let fiscalYearStart = currentMonth >= 4 ? currentYear : currentYear - 1;
-  let fiscalYearEnd = fiscalYearStart + 1;
+  // Get date components
+  const year = String(now.getFullYear()).slice(-2);  // Last 2 digits of year
+  const month = String(now.getMonth() + 1).padStart(2, '0');  // Month (01-12)
+  const day = String(now.getDate()).padStart(2, '0');  // Day (01-31)
   
-  // Format as YY-YY (e.g., 23-24)
-  const fiscalYear = `${String(fiscalYearStart).slice(-2)}${String(fiscalYearEnd).slice(-2)}`;
+  // Generate 4 random digits
+  const randomDigits = Math.floor(1000 + Math.random() * 9000);
   
-  // Generate a unique number using timestamp
-  const timestamp = now.getTime();
-  
-  // Use last 5 digits for more uniqueness and pad with zeros if needed
-  const sequentialNum = (timestamp % 100000).toString().padStart(5, '0');
-  
-  return `P${fiscalYear}-${sequentialNum}`;
+  // Format: PYYMM-DDRRRR
+  return `P${year}${month}-${day}${randomDigits}`;
 };
 
 /**

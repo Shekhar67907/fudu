@@ -93,7 +93,9 @@ export interface SelectedItem {
 }
 
 export interface PrescriptionFormData {
-  // Database record identifier - set to true when data is loaded from database
+  // Database record identifier
+  id?: string;
+  // Set to true when data is loaded from database
   isFromDatabase?: boolean;
   
   prescriptionNo: string;

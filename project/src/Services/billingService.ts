@@ -194,88 +194,170 @@ export const unifiedSearch = async (searchTerm: string): Promise<UnifiedSearchRe
       prescriptions: prescriptions.length
     });
 
-    // Create a map to track merged entries by customer mobile
-    const mergedEntries = new Map<string, UnifiedSearchResult>();
-    const results: UnifiedSearchResult[] = [];
-
-    // Process prescriptions (P only)
-    prescriptions.forEach(prescription => {
-      if (!prescription.mobile) return;
+    // Create a map to track entries by mobile number (primary key)
+    const customerMap = new Map();
+    
+    // Helper function to normalize customer data
+    const normalizeCustomerData = (entry: any, type: 'P' | 'CL' | 'Order') => {
+      if (!entry) return null;
       
-      // Check if this customer already has a contact lens entry
-      const existingEntry = mergedEntries.get(prescription.mobile);
+      // Get the most reliable name and mobile from the entry
+      const name = entry.name || entry.customer_name || 'Unknown';
+      const mobile = entry.mobile || entry.mobile_no || entry.phone || '';
       
-      if (existingEntry) {
-        // If we already have a CL entry, update it to be a merged entry
-        if (existingEntry.jobType === 'Contact Lens') {
-          existingEntry.jobType = 'P, CL';
-          existingEntry.referenceNo = `${prescription.referenceNo} | ${existingEntry.referenceNo}`;
-        }
-      } else {
-        // Add as P only entry
-        const entry = {
-          ...prescription,
-          jobType: 'P',
+      if (!mobile) return null;
+      
+      return {
+        id: entry.id,
+        name: name.trim(),
+        mobile: mobile.trim(),
+        type,
+        referenceNo: entry.referenceNo || entry.prescription_no || entry.order_no || `ID-${entry.id}`,
+        date: entry.date || entry.created_at || entry.order_date || new Date().toISOString(),
+        originalData: entry.originalData || entry
+      };
+    };
+    
+    // Process all entries
+    const allEntries = [
+      ...prescriptions.map(p => normalizeCustomerData(p, 'P')),
+      ...contactLenses.map(cl => normalizeCustomerData(cl, 'CL')),
+      ...orders.map(o => normalizeCustomerData(o, 'Order'))
+    ].filter(Boolean); // Remove any null entries
+    
+    // Process each entry and merge by mobile number
+    allEntries.forEach(entry => {
+      if (!entry) return;
+      
+      const mobile = entry.mobile;
+      
+      if (!customerMap.has(mobile)) {
+        // New customer, add to map
+        customerMap.set(mobile, {
+          id: entry.id,
+          name: entry.name,
+          mobile: entry.mobile,
+          jobType: entry.type,
+          referenceNo: entry.referenceNo,
+          date: entry.date,
+          sources: [{
+            type: entry.type,
+            data: entry.originalData,
+            referenceNo: entry.referenceNo,
+            date: entry.date
+          }],
           originalData: {
-            ...prescription.originalData,
+            ...entry.originalData,
             isMerged: false,
-            sourceTypes: ['prescription']
+            sourceTypes: [entry.type === 'Order' ? 'order' : 
+                         entry.type === 'CL' ? 'contact_lens' : 'prescription']
           }
-        };
-        mergedEntries.set(prescription.mobile, entry);
-        results.push(entry);
-      }
-    });
-
-    // Process contact lenses (CL only or merge with existing P)
-    contactLenses.forEach(cl => {
-      if (!cl.mobile) return;
-      
-      const existingEntry = mergedEntries.get(cl.mobile);
-      
-      if (existingEntry) {
-        // If we have a P entry, update it to be a merged entry
-        if (existingEntry.jobType === 'P') {
-          existingEntry.jobType = 'P, CL';
-          existingEntry.referenceNo = `${existingEntry.referenceNo} | ${cl.referenceNo}`;
-          existingEntry.originalData = {
-            ...existingEntry.originalData,
-            ...cl.originalData,
+        });
+      } else {
+        // Existing customer, merge data
+        const existing = customerMap.get(mobile);
+        
+        // Check if this exact source already exists
+        const isDuplicate = existing.sources.some(
+          (s: any) => s.type === entry.type && s.referenceNo === entry.referenceNo
+        );
+        
+        if (!isDuplicate) {
+          // Add new source
+          existing.sources.push({
+            type: entry.type,
+            data: entry.originalData,
+            referenceNo: entry.referenceNo,
+            date: entry.date
+          });
+          
+          // Update job type to show combined sources
+          if (!existing.jobType.includes(entry.type)) {
+            existing.jobType = existing.jobType ? 
+              `${existing.jobType}, ${entry.type}` : 
+              entry.type;
+          }
+          
+          // Update reference numbers if different
+          if (existing.referenceNo !== entry.referenceNo) {
+            existing.referenceNo = [
+              existing.referenceNo, 
+              entry.referenceNo
+            ].filter(Boolean).join(' | ');
+          }
+          
+          // Keep the most recent date
+          if (new Date(entry.date) > new Date(existing.date)) {
+            existing.date = entry.date;
+          }
+          
+          // Merge original data for backward compatibility
+          existing.originalData = {
+            ...existing.originalData,
+            ...entry.originalData,
             isMerged: true,
-            sourceTypes: ['prescription', 'contact_lens']
+            sourceTypes: Array.from(new Set([
+              ...(existing.originalData?.sourceTypes || []),
+              entry.type === 'Order' ? 'order' : 
+              entry.type === 'CL' ? 'contact_lens' : 'prescription'
+            ]))
           };
         }
-      } else {
-        // Add as CL only entry
-        const entry = {
-          ...cl,
-          jobType: 'CL',
-          originalData: {
-            ...cl.originalData,
-            isMerged: false,
-            sourceTypes: ['contact_lens']
-          }
-        };
-        mergedEntries.set(cl.mobile, entry);
-        results.push(entry);
       }
     });
-
-    // Add orders (these are separate and not merged)
-    orders.forEach(order => {
-      results.push({
-        ...order,
-        jobType: 'Order',
-        originalData: {
-          ...order.originalData,
-          isMerged: false,
-          sourceTypes: ['order']
-        }
+    
+    // Convert to array, sort by date (newest first) and ensure consistent structure
+    const results = Array.from(customerMap.values())
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .map(entry => {
+        // Get the most recent source for display
+        const latestSource = entry.sources?.[0]?.data || {};
+        
+        // Get all unique source types
+        const sourceTypes = Array.from(new Set(
+          (entry.sources || []).map((s: { type: string }) => s.type)
+        ));
+        
+        // Determine the primary source for display
+        const displaySource = sourceTypes.includes('contact_lens') ? 'contact_lens' :
+                            sourceTypes.includes('order') ? 'order' : 'prescription';
+        
+        // Get reference numbers from all sources
+        const referenceNos = (entry.sources || [])
+          .map((s: { data?: { reference_no?: string; prescription_no?: string } }) => 
+            s.data?.reference_no || s.data?.prescription_no
+          )
+          .filter(Boolean);
+        
+        return {
+          ...entry,
+          // Ensure required fields exist
+          id: entry.id || `cust-${Date.now()}`,
+          name: entry.name || 'Unknown',
+          mobile: entry.mobile || '',
+          // For display in the search results
+          displayName: `${entry.name} (${entry.mobile})`,
+          mobile_no: entry.mobile,
+          reference_no: referenceNos.join(' | '),
+          prescription_no: latestSource.prescription_no || latestSource.reference_no || '',
+          // Set source for display
+          source: displaySource,
+          // Include job type for reference
+          jobType: entry.jobType || sourceTypes.join(', '),
+          // Keep all the original data
+          originalData: {
+            ...(entry.originalData || {}),
+            ...latestSource,
+            sourceTypes
+          },
+          // For backward compatibility
+          ...latestSource
+        };
       });
-    });
 
-    // Sort by date (newest first)
-    return results.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    // Log the results for debugging
+    console.log('Search results:', results);
+    return results;
   } catch (error) {
     console.error('[unifiedSearch] Search failed:', error);
     throw new Error('Search failed. Please try again.');
@@ -286,12 +368,12 @@ export const unifiedSearch = async (searchTerm: string): Promise<UnifiedSearchRe
 const searchOrders = async (searchTerm: string): Promise<UnifiedSearchResult[]> => {
   console.log(`[searchOrders] Searching orders for: ${searchTerm}`);
   try {
-    // Query 1: order_no and bill_no
-    const { data, error } = await supabase
+    // Query 1: Search by order_no or bill_no directly on orders table
+    const { data: ordersByNumber, error: orderNumberError } = await supabase
       .from('orders')
       .select(`
         id, order_no, order_date, status, prescription_id, bill_no,
-        prescriptions!inner (
+        prescriptions (
           id, name, mobile_no, phone_landline, email, address, city, state, pin_code, source
         ),
         order_items (
@@ -302,33 +384,64 @@ const searchOrders = async (searchTerm: string): Promise<UnifiedSearchResult[]> 
       .order('order_date', { ascending: false })
       .limit(20);
 
-    // Query 2: prescription fields
-    const { data: prescriptionOrders, error: prescriptionError } = await supabase
-      .from('orders')
+    // Query 2: Search by prescription fields through the relationship
+    const { data: ordersByPrescription, error: prescriptionError } = await supabase
+      .from('prescriptions')
       .select(`
-        id, order_no, order_date, status, prescription_id, bill_no,
-        prescriptions!inner (
-          id, name, mobile_no, phone_landline, email, address, city, state, pin_code, source
-        ),
-        order_items (
-          id, item_name, qty, rate, amount, tax_percent, discount_percent, discount_amount
+        id, name, mobile_no, phone_landline, email, address, city, state, pin_code, source,
+        orders (
+          id, order_no, order_date, status, prescription_id, bill_no,
+          order_items (
+            id, item_name, qty, rate, amount, tax_percent, discount_percent, discount_amount
+          )
         )
       `)
-      .or(`prescriptions.name.ilike.%${searchTerm}%,prescriptions.mobile_no.ilike.%${searchTerm}%,prescriptions.phone_landline.ilike.%${searchTerm}%`)
-      .order('order_date', { ascending: false })
+      .or(`name.ilike.%${searchTerm}%,mobile_no.ilike.%${searchTerm}%,phone_landline.ilike.%${searchTerm}%`)
+      .order('created_at', { ascending: false })
       .limit(20);
 
-    if (error && prescriptionError) {
-      console.error('[searchOrders] Error:', error, prescriptionError);
+    // Process the second query results to match the first query's structure
+    const processedPrescriptionOrders = (ordersByPrescription || [])
+      .filter(prescription => prescription.orders && prescription.orders.length > 0)
+      .flatMap(prescription => 
+        prescription.orders.map(order => ({
+          ...order,
+          prescriptions: [{
+            id: prescription.id,
+            name: prescription.name,
+            mobile_no: prescription.mobile_no,
+            phone_landline: prescription.phone_landline,
+            email: prescription.email,
+            address: prescription.address,
+            city: prescription.city,
+            state: prescription.state,
+            pin_code: prescription.pin_code,
+            source: prescription.source
+          }]
+        }))
+      );
+
+    // Combine both results and remove duplicates
+    const combinedData = [...(ordersByNumber || []), ...processedPrescriptionOrders];
+    const error = orderNumberError || prescriptionError;
+
+    if (error) {
+      console.error('[searchOrders] Error:', error);
       return [];
     }
-    const allData = [...(data || []), ...(prescriptionOrders || [])]
-      .filter((item, index, self) => index === self.findIndex(t => t.id === item.id));
-    if (!allData || !Array.isArray(allData)) {
+
+    // Remove duplicates by order ID
+    const uniqueData = combinedData.filter(
+      (order, index, self) => index === self.findIndex(t => t.id === order.id)
+    );
+
+    if (!uniqueData || !Array.isArray(uniqueData)) {
       console.warn('[searchOrders] No data returned or invalid format');
       return [];
     }
-    const results = allData as Array<Order>;
+
+    // Ensure we have the correct type
+    const results = uniqueData as unknown as Order[];
     return results.map(order => ({
       id: order.id,
       sourceType: 'order' as const,
@@ -970,17 +1083,42 @@ export const formatSearchResult = (result: UnifiedSearchResult) => {
  * @param customer Customer object with at least an ID or mobile number
  * @returns Detailed customer information or null if not found
  */
-export const getCustomerDetails = async (customer: CustomerSearchResult) => {
+export const getCustomerDetails = async (customer: CustomerSearchResult | any) => {
   try {
+    // Handle case where customer is from unified search
+    if (customer.originalData) {
+      // If we have the original data, use it directly
+      return {
+        ...customer.originalData,
+        // Map unified fields to expected fields
+        name: customer.name,
+        mobile_no: customer.mobile,
+        mobile: customer.mobile,
+        email: customer.email,
+        address: customer.address,
+        city: customer.city,
+        state: customer.state,
+        pin_code: customer.pinCode || customer.pin_code,
+        // Add any other fields that might be needed
+        ...(customer.originalData.data || {})
+      };
+    }
+
+    // Handle legacy customer search results
     let query;
+    let source = customer.source;
     
-    if (customer.source === 'prescription') {
+    // Map unified source types to legacy source types if needed
+    if (source === 'order') source = 'ordercard';
+    else if (source === 'contact_lens_prescription') source = 'contact_lens';
+    
+    if (source === 'prescription') {
       query = supabase
         .from('prescriptions')
         .select('*')
         .eq('id', customer.id)
         .single();
-    } else if (customer.source === 'ordercard') {
+    } else if (source === 'ordercard') {
       query = supabase
         .from('orders')
         .select(`
@@ -999,7 +1137,7 @@ export const getCustomerDetails = async (customer: CustomerSearchResult) => {
         `)
         .eq('id', customer.id)
         .single();
-    } else if (customer.source === 'contact_lens') {
+    } else if (source === 'contact_lens') {
       query = supabase
         .from('contact_lens_prescriptions')
         .select(`
@@ -1018,6 +1156,20 @@ export const getCustomerDetails = async (customer: CustomerSearchResult) => {
         `)
         .eq('id', customer.id)
         .single();
+    } else {
+      console.warn('Unknown customer source, trying to fetch from any table:', source);
+      // Try to fetch from any table as a fallback
+      const [prescriptionRes, orderRes, contactLensRes] = await Promise.all([
+        supabase.from('prescriptions').select('*').eq('id', customer.id).single(),
+        supabase.from('orders').select('*').eq('id', customer.id).single(),
+        supabase.from('contact_lens_prescriptions').select('*').eq('id', customer.id).single()
+      ]);
+      
+      if (prescriptionRes.data) return prescriptionRes.data;
+      if (orderRes.data) return orderRes.data;
+      if (contactLensRes.data) return contactLensRes.data;
+      
+      throw new Error('Customer not found in any table');
     }
 
     if (!query) {
@@ -1037,6 +1189,21 @@ export const getCustomerDetails = async (customer: CustomerSearchResult) => {
     return data;
   } catch (error) {
     console.error('Error fetching customer details:', error);
+    // Instead of throwing, return the original customer data if available
+    if (customer && typeof customer === 'object') {
+      console.warn('Falling back to original customer data due to error');
+      return {
+        ...customer,
+        // Map any necessary fields
+        name: customer.name || customer.customer_name,
+        mobile_no: customer.mobile || customer.mobile_no,
+        email: customer.email,
+        address: customer.address,
+        city: customer.city,
+        state: customer.state,
+        pin_code: customer.pinCode || customer.pin_code
+      };
+    }
     throw error;
   }
 };
@@ -1059,11 +1226,20 @@ export const getCustomerPurchaseHistory = async (mobileNo: string) => {
     let customerPrescriptionIds: string[] = [];
     
     // 1. Get prescriptions with only the columns that exist in the database
-    const { data: prescriptionsData, error: rxError } = await supabase
+    // Build the query for prescriptions
+    let rxQuery = supabase
       .from('prescriptions')
       .select('*')
-      .or(`mobile_no.ilike.%${mobileNo}%,phone_landline.ilike.%${mobileNo}%`)
+      .or(`mobile_no.ilike.%${mobileNo}%,phone_landline.ilike.%${mobileNo}%`);
+      
+    // Execute the query
+    const { data: prescriptionsData, error: rxError } = await rxQuery
       .order('date', { ascending: false });
+      
+    if (rxError) {
+      console.error('Error fetching prescriptions:', rxError);
+      throw rxError;
+    }
     
     const customerPrescriptions = (prescriptionsData || []) as Prescription[];
     if (rxError) {
@@ -1072,11 +1248,20 @@ export const getCustomerPurchaseHistory = async (mobileNo: string) => {
     }
     
     // 2. Get orders with order items (via prescriptions)
-    const { data: ordersData, error: orderError } = await supabase
+    // Build the query for orders
+    let orderQuery = supabase
       .from('prescriptions')
       .select('*, orders(*, order_items(*))')
-      .or(`mobile_no.ilike.%${mobileNo}%,phone_landline.ilike.%${mobileNo}%`)
+      .or(`mobile_no.ilike.%${mobileNo}%,phone_landline.ilike.%${mobileNo}%`);
+      
+    // Execute the query
+    const { data: ordersData, error: orderError } = await orderQuery
       .order('order_date', { foreignTable: 'orders', ascending: false });
+      
+    if (orderError) {
+      console.error('Error fetching orders:', orderError);
+      throw orderError;
+    }
     
     if (orderError) {
       console.error('Error fetching orders:', orderError);
@@ -1091,16 +1276,11 @@ export const getCustomerPurchaseHistory = async (mobileNo: string) => {
       
       // First, try to fetch by mobile number directly from contact_lens_prescriptions
       console.log('Searching contact lens data by mobile/name:', mobileNo);
+      // Build the query using Supabase's query builder
       const { data: clBySearch, error: clSearchError } = await supabase
         .from('contact_lens_prescriptions')
         .select('*, contact_lens_items(*), prescriptions(*)')
-        .or(
-          `mobile_no.ilike.%${mobileNo}%,
-          phone_landline.ilike.%${mobileNo}%,
-          name.ilike.%${mobileNo}%,
-          prescription_no.ilike.%${mobileNo}%,
-          prescriptions.prescription_no.ilike.%${mobileNo}%`
-        )
+        .or(`mobile_no.ilike.%${mobileNo}%,phone_landline.ilike.%${mobileNo}%,name.ilike.%${mobileNo}%,prescription_no.ilike.%${mobileNo}%,prescriptions.prescription_no.ilike.%${mobileNo}%`)
         .order('created_at', { ascending: false });
       
       console.log('Contact lens search results:', {

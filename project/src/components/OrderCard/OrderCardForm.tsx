@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import * as orderService from '../../Services/orderService';
+import { orderService } from '../../Services/orderService';
 import Card from '../ui/Card';
 import Input from '../ui/Input';
 import Select from '../ui/Select';
@@ -23,32 +23,13 @@ interface SearchSuggestion extends PrescriptionFormData {
   status: string; // Make status required to match PrescriptionFormData
 }
 
-// Helper function to generate a unique prescription number
-const generateUniquePrescriptionNumber = (): string => {
-  const now = new Date();
-  const year = now.getFullYear().toString().substring(2); // Get last 2 digits of year
-  const month = (now.getMonth() + 1).toString().padStart(2, '0');
-  const day = now.getDate().toString().padStart(2, '0');
-  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-  
-  return `P${year}${month}-${day}${random}`;
-};
+// Use the service function for generating prescription numbers
+const generateUniquePrescriptionNumber = orderService.generateUniquePrescriptionNumber;
 
-// Helper function to generate a unique reference number
-// If prescriptionNumber is provided, use it as the reference number
-const generateUniqueReferenceNumber = (prescriptionNumber?: string): string => {
-  // If a prescription number is provided, use it as the reference number
-  if (prescriptionNumber) {
-    return prescriptionNumber;
-  }
-  
-  // Otherwise generate a new unique reference number
-  const now = new Date();
-  const year = now.getFullYear().toString().substring(2); // Get last 2 digits of year
-  const month = (now.getMonth() + 1).toString().padStart(2, '0');
-  const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
-  
-  return `REF${year}${month}-${random}`;
+// Helper function to generate a reference number
+// By default, it uses the prescription number but can be edited separately
+const generateReferenceNumber = (prescriptionNumber: string): string => {
+  return prescriptionNumber; // Simply return the prescription number as the default reference number
 };
 
 // Helper function to format date for input fields
@@ -71,14 +52,12 @@ const formatDateForInput = (date: string | null | undefined, format: 'date' | 'd
 };
 
 // Initial form state with proper nested structure and default datetime-local format
-// Generate a unique prescription number for initial state
-const initialPrescriptionNumber = generateUniquePrescriptionNumber();
-
-// Initial state for the form using PrescriptionFormData type
+// We'll initialize with a temporary prescription number and update it in useEffect
 const initialFormState: PrescriptionFormData = {
   // Common/Customer fields
-  prescriptionNo: initialPrescriptionNumber,
-  referenceNo: generateUniqueReferenceNumber(initialPrescriptionNumber), // Use prescription number as reference number by default
+  // Initialize with a temporary value that will be replaced in useEffect
+  prescriptionNo: 'P000000-0000', // Temporary value
+  referenceNo: 'REF0000-00000', // Temporary value, will be updated in useEffect
   currentDateTime: formatDateForInput(getTodayDate(), 'datetime-local'),
   deliveryDateTime: formatDateForInput(getNextMonthDate(), 'datetime-local'),
   date: formatDateForInput(getTodayDate()), // Using date format
@@ -159,6 +138,30 @@ const initialFormState: PrescriptionFormData = {
 };
 
 const OrderCardForm: React.FC = () => {
+  // Generate and set a unique prescription number when the component mounts
+  useEffect(() => {
+    const setInitialPrescriptionNumber = async () => {
+      try {
+        const newPrescriptionNo = await generateUniquePrescriptionNumber();
+        setFormData(prev => ({
+          ...prev,
+          prescriptionNo: newPrescriptionNo,
+          referenceNo: generateReferenceNumber(newPrescriptionNo) // Set reference same as prescription by default
+        }));
+      } catch (error) {
+        console.error('Failed to generate initial prescription number:', error);
+        // Fallback to a timestamp-based number if generation fails
+        const fallback = `P${new Date().getTime().toString().slice(-10)}`;
+        setFormData(prev => ({
+          ...prev,
+          prescriptionNo: fallback,
+          referenceNo: fallback
+        }));
+      }
+    };
+    
+    setInitialPrescriptionNumber();
+  }, []);
   // Use the imported PrescriptionFormData type for state
   const [formData, setFormData] = useState<PrescriptionFormData>(initialFormState);
 
@@ -860,8 +863,8 @@ const OrderCardForm: React.FC = () => {
       
       // For prescription number and reference number:
       // 1. If it's an existing prescription (has ID), use the original values
-      // 2. If it's a new order, generate new unique numbers
-      prescriptionNumber = isNewOrder ? generateUniquePrescriptionNumber() : suggestion.prescriptionNo;
+      // 2. If it's a new order, generate a new prescription number
+      prescriptionNumber = isNewOrder ? await generateUniquePrescriptionNumber() : suggestion.prescriptionNo;
       
       // By default, use prescription number as reference number unless an explicit reference number exists
       if (isNewOrder) {
@@ -1369,9 +1372,119 @@ const OrderCardForm: React.FC = () => {
   };
   
   // Function to save order data to the database
+  // Check if reference number is unique before saving
+  const validateReferenceNumber = async (referenceNo: string, currentPrescriptionId?: string): Promise<boolean> => {
+    if (!referenceNo || referenceNo === formData.prescriptionNo) {
+      return true; // Empty or same as prescription number is valid
+    }
+    
+    try {
+      const { data, error } = await supabase
+        .from('prescriptions')
+        .select('id')
+        .eq('reference_no', referenceNo)
+        .neq('id', currentPrescriptionId || '') // Exclude current record if updating
+        .maybeSingle();
+
+      if (error) throw error;
+      
+      if (data) {
+        setNotification({
+          message: 'This reference number is already in use. Please use a different one.',
+          type: 'error',
+          visible: true
+        });
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('Error validating reference number:', error);
+      setNotification({
+        message: 'Error validating reference number. Please try again.',
+        type: 'error',
+        visible: true
+      });
+      return false;
+    }
+  };
+
   const saveOrderToDatabase = async () => {
     try {
-      console.log('Saving order to database...');
+      console.log('Starting to save order to database...');
+      
+      // 1. Generate a prescription number if it doesn't exist
+      if (!formData.prescriptionNo) {
+        console.log('Generating new prescription number...');
+        const newPrescriptionNo = await generateUniquePrescriptionNumber();
+        setFormData(prev => ({
+          ...prev,
+          prescriptionNo: newPrescriptionNo,
+          // Only set referenceNo if it's empty or matches the old prescription number
+          referenceNo: !prev.referenceNo || prev.referenceNo === prev.prescriptionNo 
+            ? newPrescriptionNo 
+            : prev.referenceNo
+        }));
+      }
+      
+      // 2. Validate reference number if it's different from prescription number
+      if (formData.referenceNo && formData.referenceNo !== formData.prescriptionNo) {
+        console.log('Validating reference number...');
+        const isValid = await validateReferenceNumber(formData.referenceNo, formData.id);
+        if (!isValid) {
+          console.log('Reference number validation failed');
+          return;
+        }
+      } else if (!formData.referenceNo) {
+        // If reference number is empty, set it to match prescription number
+        console.log('Setting reference number to match prescription number');
+        setFormData(prev => ({
+          ...prev,
+          referenceNo: prev.prescriptionNo
+        }));
+        // Wait for state update to complete
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      
+      console.log('All validations passed, proceeding with save...');
+      
+      // Validate required fields
+      if (!formData.name || formData.name.trim() === '') {
+        setNotification({
+          message: 'Please enter customer name',
+          type: 'error',
+          visible: true
+        });
+        return;
+      }
+      
+      if (!formData.prescriptionNo || formData.prescriptionNo.trim() === '') {
+        setNotification({
+          message: 'Please enter prescription number',
+          type: 'error',
+          visible: true
+        });
+        return;
+      }
+      
+      if (!formData.mobileNo || formData.mobileNo.trim() === '') {
+        setNotification({
+          message: 'Please enter mobile number',
+          type: 'error',
+          visible: true
+        });
+        return;
+      }
+      
+      // Basic mobile number validation (10 digits)
+      const mobileRegex = /^\d{10}$/;
+      if (!mobileRegex.test(formData.mobileNo.trim())) {
+        setNotification({
+          message: 'Please enter a valid 10-digit mobile number',
+          type: 'error',
+          visible: true
+        });
+        return;
+      }
       
       // First, try to find an existing prescription by using multiple identifiers
       // This ensures we update existing records instead of creating duplicates
@@ -1448,6 +1561,10 @@ const OrderCardForm: React.FC = () => {
         if (!isExistingRecord) {
           console.log('No existing prescription found, creating new one');
           
+          // Ensure we have valid prescription and reference numbers
+          const prescriptionNoToSave = formData.prescriptionNo || await generateUniquePrescriptionNumber();
+          const referenceNoToSave = formData.referenceNo || prescriptionNoToSave;
+          
           // Check if there's a prescription with the same mobile_no and source 'OrderCard'
           let existingOrderCardPrescription = null;
           if (formData.mobileNo && formData.mobileNo.trim() !== '') {
@@ -1469,13 +1586,30 @@ const OrderCardForm: React.FC = () => {
             prescriptionId = existingOrderCardPrescription.id;
             isExistingRecord = true;
             console.log('Reusing existing OrderCard prescription ID:', prescriptionId);
+            
+            // Update the existing record with new data
+            const { error: updateError } = await supabase
+              .from('prescriptions')
+              .update({
+                prescription_no: prescriptionNoToSave,
+                reference_no: referenceNoToSave,
+                updated_at: new Date().toISOString()
+                // Add other fields that should be updated
+              })
+              .eq('id', prescriptionId);
+              
+            if (updateError) {
+              console.error('Error updating existing prescription:', updateError);
+              throw new Error(`Failed to update prescription: ${updateError.message}`);
+            }
+            console.log('Updated existing prescription with new data');
           } else {
             // Create a new prescription with all available fields and source='OrderCard'
             const { data: newPrescription, error: createError } = await supabase
               .from('prescriptions')
               .insert({
-                prescription_no: formData.prescriptionNo,
-                reference_no: formData.referenceNo,
+                prescription_no: prescriptionNoToSave,
+                reference_no: referenceNoToSave,
                 name: formData.name || 'Unnamed', // Required field
                 prescribed_by: formData.prescribedBy || 'Order Card System', // Default to Order Card System
                 date: formData.date || new Date().toISOString().split('T')[0], // Required field
@@ -1485,10 +1619,12 @@ const OrderCardForm: React.FC = () => {
                 city: formData.city,
                 state: formData.state,
                 pin_code: formData.pinCode,
+                source: 'OrderCard',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
                 age: formData.age,
                 gender: formData.gender,
-                customer_code: formData.customerCode,
-                source: 'OrderCard' // Set source to 'OrderCard' for new prescriptions
+                customer_code: formData.customerCode
               })
               .select('id')
               .single();

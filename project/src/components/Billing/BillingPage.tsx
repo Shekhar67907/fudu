@@ -562,13 +562,21 @@ const BillingPage: React.FC = () => {
     // Set scheduled amount to total discount from all items
     setSchDisc(totalDiscount.toFixed(2));
     
-    // Calculate balance (total after discount - payments - advances)
+    // Calculate balance (total after discount - payments - advances - cash)
     const paymentAmount = parseFloat(payment) || 0;
     const advanceAmount = parseFloat(advance) || 0;
-    const balanceAmount = totalAfterDiscount - paymentAmount - advanceAmount;
+    const cashAmount = parseFloat(cash) || 0;
+    const ccUpiAmount = parseFloat(ccUpiAdv) || 0;
+    const chequeAmount = parseFloat(cheque) || 0;
+    
+    // Total payments including all methods
+    const totalPayments = paymentAmount + advanceAmount + cashAmount + ccUpiAmount + chequeAmount;
+    
+    // Calculate balance
+    const balanceAmount = totalAfterDiscount - totalPayments;
     
     setBalance(Math.max(0, balanceAmount).toFixed(2)); // Ensure balance doesn't go negative
-  }, [billingItems, payment, advance]);
+  }, [billingItems, payment, advance, cash, ccUpiAdv, cheque]);
 
   // Handle payment field changes
   const handlePaymentChange = (field: string, value: string) => {
@@ -649,7 +657,32 @@ const BillingPage: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('Form submitted');
+    
+    // Validate required fields
+    if (!name.trim()) {
+      alert('Please enter customer name');
+      return;
+    }
+    
+    if (!referenceNo.trim()) {
+      alert('Please enter reference number');
+      return;
+    }
+    
+    if (!mobile.trim()) {
+      alert('Please enter mobile number');
+      return;
+    }
+    
+    // Basic mobile number validation (10 digits)
+    const mobileRegex = /^\d{10}$/;
+    if (!mobileRegex.test(mobile.trim())) {
+      alert('Please enter a valid 10-digit mobile number');
+      return;
+    }
+    
+    console.log('Form submitted with valid data');
+    // Proceed with form submission
   };
 
   const handleClear = () => {
