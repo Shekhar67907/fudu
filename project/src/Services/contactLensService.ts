@@ -133,75 +133,121 @@ interface ContactLensData {
  * - contact_lens_items
  * - contact_lens_payments
  */
-// Helper function to create a new prescription record from contact lens data
+// Helper function to get or create a prescription record for Contact Lens
 const createMainPrescription = async (contactLensData: ContactLensData): Promise<{ success: boolean; message: string; id?: string }> => {
   try {
     const { prescription } = contactLensData;
-    
-    // Generate prescription number if not provided
+    const mobileNumber = prescription.mobile || null; // Get mobile number
+
+
+    // 1. Try to find an existing ContactLens prescription for this mobile_no
+    if (mobileNumber && mobileNumber.trim() !== '') {
+      try {
+        // First check if there's a ContactLens prescription with this mobile number
+        const { data: contactLensPrescription, error: clFindError } = await supabase
+          .from('prescriptions')
+          .select('id')
+          .eq('mobile_no', mobileNumber)
+          .eq('source', 'ContactLens')
+          .maybeSingle();
+
+        if (contactLensPrescription?.id) {
+          // Found existing ContactLens prescription - reuse it
+          console.log('Found existing ContactLens prescription with ID:', contactLensPrescription.id);
+          return {
+            success: true,
+            message: 'Main ContactLens prescription record found and reused.',
+            id: contactLensPrescription.id
+          };
+        }
+
+        if (clFindError) {
+          console.warn('Error checking for existing ContactLens prescription:', clFindError.message);
+        }
+
+        // Check if there's any prescription with this mobile number (regardless of source)
+        const { data: anyPrescription, error: anyFindError } = await supabase
+          .from('prescriptions')
+          .select('id, source')
+          .eq('mobile_no', mobileNumber)
+          .maybeSingle();
+
+        if (anyFindError) {
+          console.warn('Error checking for any existing prescription:', anyFindError.message);
+        }
+
+        if (anyPrescription) {
+          console.log(`Found existing prescription with mobile ${mobileNumber} and source: ${anyPrescription.source}`);
+          // We'll continue to create a new ContactLens prescription with the same mobile number
+          // The unique constraint on (mobile_no, source) will allow this
+        }
+      } catch (error) {
+        console.error('Error in prescription lookup:', error);
+        // Continue with creation if there was an error in lookup
+      }
+    }
+
+    // 2. If no existing ContactLens prescription found (or mobile_no was blank/find failed), create a new one
     const prescriptionNo = prescription.prescription_id || generateContactLensPrescriptionNo();
+    const referenceNo = prescriptionNo; // Standard practice, can be same as prescription_no
+
+    const insertPayload = {
+      prescription_no: prescriptionNo,
+      reference_no: referenceNo,
+      name: prescription.name || 'Customer',
+      gender: prescription.gender || 'Male',
+      age: prescription.age || null,
+      mobile_no: mobileNumber,
+      email: prescription.email || null,
+      address: prescription.address || null,
+      city: prescription.city || null,
+      state: prescription.state || null,
+      pin_code: prescription.pin || null,
+      customer_code: prescription.customer_code || null,
+      birth_day: prescription.birth_day || null,
+      marriage_anniversary: prescription.marriage_anniversary || null,
+      phone_landline: prescription.phone_landline || null,
+      prescribed_by: prescription.prescribed_by || 'Contact Lens Dept',
+      date: new Date().toISOString().split('T')[0],
+      others: prescription.remarks || null,
+      source: 'ContactLens' // CRITICAL: Set the source for ContactLens
+    };
     
-    // Set reference number equal to prescription number (standard practice)
-    const referenceNo = prescriptionNo;
-    
-    // Insert the new prescription record
     const { data: newPrescription, error: insertError } = await supabase
       .from('prescriptions')
-      .insert({
-        prescription_no: prescriptionNo,
-        reference_no: referenceNo, // Always set reference number equal to prescription number
-        // Map known fields from the contact lens prescription
-        name: prescription.name || 'Customer',
-        gender: prescription.gender || 'Male',
-        age: prescription.age || null,
-        mobile_no: prescription.mobile || null,
-        email: prescription.email || null,
-        address: prescription.address || null,
-        city: prescription.city || null,
-        state: prescription.state || null,
-        pin_code: prescription.pin || null,
-        // Add the new fields
-        customer_code: prescription.customer_code || null,
-        birth_day: prescription.birth_day || null,
-        marriage_anniversary: prescription.marriage_anniversary || null,
-        phone_landline: prescription.phone_landline || null,
-        // Set defaults for required fields
-        prescribed_by: prescription.prescribed_by || 'Contact Lens Dept',
-        date: new Date().toISOString().split('T')[0],
-        // Use remarks from contact lens prescription
-        others: prescription.remarks || null
-      })
-      .select()
+      .insert(insertPayload)
+      .select('id') // Only select the ID for efficiency
       .single();
 
     if (insertError) {
-      console.error('Error creating main prescription:', insertError);
-      return { 
-        success: false, 
-        message: `Error creating main prescription: ${insertError.message}` 
+      console.error('Error creating new main prescription:', insertError.message);
+      return {
+        success: false,
+        message: `Error creating main prescription: ${insertError.message}`
       };
     }
 
-    if (!newPrescription) {
-      console.error('Failed to create main prescription: No data returned');
-      return { 
-        success: false, 
-        message: 'Failed to create main prescription: No data returned' 
+    if (!newPrescription || !newPrescription.id) {
+      console.error('Failed to create main prescription: No ID returned after insert.');
+      return {
+        success: false,
+        message: 'Failed to create main prescription: No ID returned after insert.'
       };
     }
 
-    console.log('Created main prescription with ID:', newPrescription.id);
-    return { 
-      success: true, 
-      message: 'Main prescription created successfully', 
-      id: newPrescription.id 
+    console.log('Created new main prescription with ID:', newPrescription.id);
+    return {
+      success: true,
+      message: 'Main prescription created successfully',
+      id: newPrescription.id
     };
+
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error creating main prescription';
-    console.error('Error in createMainPrescription:', errorMessage);
-    return { 
-      success: false, 
-      message: `Error creating main prescription: ${errorMessage}` 
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error during main prescription creation';
+    console.error('Error in createMainPrescription catch block:', errorMessage);
+    return {
+      success: false,
+      message: `Error creating main prescription: ${errorMessage}`
     };
   }
 };
@@ -213,36 +259,19 @@ export const saveContactLensPrescription = async (data: ContactLensData): Promis
     const { prescription } = data;
     console.log('Saving contact lens prescription for prescription number:', prescription.prescription_id);
     
-    // First, try to find the prescription ID from the main prescriptions table
-    console.log('Looking up prescription ID in main prescriptions table...');
-    const { data: existingPrescription, error: lookupError } = await supabase
-      .from('prescriptions')
-      .select('id')
-      .eq('prescription_no', prescription.prescription_id)
-      .maybeSingle();
-    
-    if (lookupError) {
-      console.error('Error looking up prescription:', lookupError);
-      return { success: false, message: `Error looking up prescription: ${lookupError.message}` };
-    }
-    
     let prescriptionUuid: string;
     
-    // If the prescription doesn't exist yet in the main table, create it
-    if (!existingPrescription) {
-      console.log('Prescription not found in main table. Creating new main prescription...');
-      const createResult = await createMainPrescription(data);
-      
-      if (!createResult.success || !createResult.id) {
-        return createResult; // Return the error from createMainPrescription
-      }
-      
-      prescriptionUuid = createResult.id;
-      console.log('Created new main prescription with UUID:', prescriptionUuid);
-    } else {
-      prescriptionUuid = existingPrescription.id;
-      console.log('Found existing prescription with UUID:', prescriptionUuid);
+    // Always use createMainPrescription which handles the find-or-create logic
+    // This ensures we properly handle the source field and mobile number uniqueness
+    console.log('Creating/updating main prescription...');
+    const createResult = await createMainPrescription(data);
+    
+    if (!createResult.success || !createResult.id) {
+      return createResult; // Return the error from createMainPrescription
     }
+    
+    prescriptionUuid = createResult.id;
+    console.log('Main prescription processed with UUID:', prescriptionUuid);
     
     // Check if a contact lens prescription already exists for this prescription ID
     console.log('Checking if contact lens prescription already exists...');

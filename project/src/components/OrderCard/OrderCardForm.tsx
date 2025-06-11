@@ -1448,34 +1448,58 @@ const OrderCardForm: React.FC = () => {
         if (!isExistingRecord) {
           console.log('No existing prescription found, creating new one');
           
-          // Create a new prescription with all available fields
-          const { data: newPrescription, error: createError } = await supabase
-            .from('prescriptions')
-            .insert({
-              prescription_no: formData.prescriptionNo,
-              reference_no: formData.referenceNo,
-              name: formData.name || 'Unnamed', // Required field
-              prescribed_by: formData.prescribedBy || 'Unknown', // Required field
-              date: formData.date || new Date().toISOString().split('T')[0], // Required field
-              mobile_no: formData.mobileNo,
-              email: formData.email,
-              address: formData.address,
-              city: formData.city,
-              state: formData.state,
-              pin_code: formData.pinCode,
-              age: formData.age,
-              gender: formData.gender,
-              customer_code: formData.customerCode
-            })
-            .select('id')
-            .single();
-            
-          if (createError || !newPrescription) {
-            throw new Error(`Failed to create prescription: ${createError?.message || 'Unknown error'}`);
+          // Check if there's a prescription with the same mobile_no and source 'OrderCard'
+          let existingOrderCardPrescription = null;
+          if (formData.mobileNo && formData.mobileNo.trim() !== '') {
+            const { data: existingPrescription, error: findError } = await supabase
+              .from('prescriptions')
+              .select('id')
+              .eq('mobile_no', formData.mobileNo)
+              .eq('source', 'OrderCard')
+              .maybeSingle();
+              
+            if (!findError && existingPrescription) {
+              existingOrderCardPrescription = existingPrescription;
+              console.log('Found existing OrderCard prescription with same mobile number:', existingPrescription.id);
+            }
           }
           
-          prescriptionId = newPrescription.id;
-          console.log('Created new prescription:', newPrescription);
+          if (existingOrderCardPrescription) {
+            // Use existing OrderCard prescription
+            prescriptionId = existingOrderCardPrescription.id;
+            isExistingRecord = true;
+            console.log('Reusing existing OrderCard prescription ID:', prescriptionId);
+          } else {
+            // Create a new prescription with all available fields and source='OrderCard'
+            const { data: newPrescription, error: createError } = await supabase
+              .from('prescriptions')
+              .insert({
+                prescription_no: formData.prescriptionNo,
+                reference_no: formData.referenceNo,
+                name: formData.name || 'Unnamed', // Required field
+                prescribed_by: formData.prescribedBy || 'Order Card System', // Default to Order Card System
+                date: formData.date || new Date().toISOString().split('T')[0], // Required field
+                mobile_no: formData.mobileNo,
+                email: formData.email,
+                address: formData.address,
+                city: formData.city,
+                state: formData.state,
+                pin_code: formData.pinCode,
+                age: formData.age,
+                gender: formData.gender,
+                customer_code: formData.customerCode,
+                source: 'OrderCard' // Set source to 'OrderCard' for new prescriptions
+              })
+              .select('id')
+              .single();
+              
+            if (createError || !newPrescription) {
+              throw new Error(`Failed to create prescription: ${createError?.message || 'Unknown error'}`);
+            }
+            
+            prescriptionId = newPrescription.id;
+            console.log('Created new prescription with OrderCard source:', newPrescription);
+          }
         } else {
           // If we found an existing record, make sure we update all relevant fields
           console.log('Updating existing prescription:', prescriptionId);
@@ -1489,13 +1513,16 @@ const OrderCardForm: React.FC = () => {
           updateData.name = formData.name || 'Unnamed';
           
           // prescribed_by is a required field (NOT NULL)
-          updateData.prescribed_by = formData.prescribedBy || 'Unknown';
+          updateData.prescribed_by = formData.prescribedBy || 'Order Card System';
           
           // date is a required field (NOT NULL)
           updateData.date = formData.date || new Date().toISOString().split('T')[0];
           
           // prescription_no is a required field (NOT NULL) and must be unique
           updateData.prescription_no = formData.prescriptionNo || '';
+          
+          // Set source to 'OrderCard' for existing records that might not have it set
+          updateData.source = 'OrderCard';
           
           // Optional fields - only update if they have values
           if (formData.mobileNo) updateData.mobile_no = formData.mobileNo;

@@ -1,21 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Minus, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getTodayDate } from '../../utils/helpers';
+import CustomerSearch from './CustomerSearch';
+import { getCustomerDetails, getCustomerPurchaseHistory } from '../../Services/billingService';
+
+interface PurchaseHistory {
+  id: string;
+  type: string;
+  prescription_no?: string;
+  order_no?: string;
+  date: string;
+  total_amount?: number;
+}
 
 // Define the interface for billing items
 interface BillingItem {
-  id: number;
+  id: string;
   selected: boolean;
   itemCode: string;
+  itemName: string;
+  orderNo: string;
   rate: string;
   taxPercent: string;
   quantity: string;
   amount: string;
-  itemName: string;
-  orderNo: string;
   discount: string;
   discountPercent: string;
+  _originalPurchase?: any;
+  [key: string]: any;
 }
 
 const BillingPage: React.FC = () => {
@@ -23,9 +36,12 @@ const BillingPage: React.FC = () => {
   const [cashMemo, setCashMemo] = useState('B1920-030');
   const [referenceNo, setReferenceNo] = useState('B1920-030');
   const [currentDate, setCurrentDate] = useState(getTodayDate());
-  const [currentTime, setCurrentTime] = useState(
-    new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
-  );
+  // Format time in 24-hour format for HTML input[type="time"]
+  const formatTimeForInput = (date: Date) => {
+    return date.toTimeString().slice(0, 5); // Returns HH:MM
+  };
+  
+  const [currentTime, setCurrentTime] = useState(formatTimeForInput(new Date()));
   const [jobType, setJobType] = useState('');
   const [bookingBy, setBookingBy] = useState('');
   const [itemName, setItemName] = useState('');
@@ -45,6 +61,319 @@ const BillingPage: React.FC = () => {
   const [ccode, setCcode] = useState('');
   const [isCash, setIsCash] = useState(false);
   
+  // Customer data and purchase history
+  const [customerPurchaseHistory, setCustomerPurchaseHistory] = useState<PurchaseHistory[]>([]);
+  const [isLoadingCustomer, setIsLoadingCustomer] = useState(false);
+  
+  // Billing items state
+  const [billingItems, setBillingItems] = useState<BillingItem[]>([]);
+  
+  // Start with an empty array - items will be loaded when a customer is selected
+  useEffect(() => {
+    setBillingItems([]);
+  }, []);
+
+  // Handle customer selection from search
+  const handleCustomerSelect = async (customer: any) => {
+    try {
+      console.log('Customer selected from search:', customer);
+      setIsLoadingCustomer(true);
+      
+      // Clear previous customer data
+      setName('');
+      setMobile('');
+      setEmail('');
+      setAddress('');
+      setCity('');
+      setState('');
+      setPin('');
+      setAge('');
+      setBillingItems([1, 2, 3].map(id => ({
+        id: id.toString(),
+        selected: false,
+        itemCode: '',
+        itemName: '',
+        orderNo: '',
+        rate: '0',
+        taxPercent: '0',
+        quantity: '1',
+        amount: '0',
+        discount: '0',
+        discountPercent: '0',
+        _originalPurchase: null
+      })));
+      
+      // Fetch full customer details from their original table
+      console.log('Fetching detailed customer data...');
+      const detailedCustomerData = await getCustomerDetails(customer);
+      console.log('Detailed customer data:', detailedCustomerData);
+
+      // Use detailed data if available, otherwise fall back to search result data
+      const customerData = detailedCustomerData || customer;
+      const mobileNo = customerData.mobile_no || customer.mobile_no || customer.mobile || customer.phone;
+      
+      if (!mobileNo) {
+        console.error('No mobile number found for customer');
+        return;
+      }
+
+      // Populate form fields with customer data
+      console.log('Setting customer details from data');
+      const customerName = customerData.name || customerData.customer_name || '';
+      
+      // Extract name prefix if present (e.g., "Mr. John Doe" -> "Mr.")
+      const nameParts = customerName.split(' ');
+      const possiblePrefix = nameParts[0].endsWith('.') ? nameParts[0] : '';
+      const nameWithoutPrefix = possiblePrefix ? nameParts.slice(1).join(' ') : customerName;
+      
+      if (possiblePrefix && namePrefixOptions.includes(possiblePrefix)) {
+        setNamePrefix(possiblePrefix);
+        setName(nameWithoutPrefix);
+      } else {
+        setName(customerName);
+      }
+      
+      setMobile(mobileNo);
+      setEmail(customerData.email || '');
+      setAddress(customerData.address || '');
+      setCity(customerData.city || '');
+      setState(customerData.state || '');
+      setPin(customerData.pin_code || customerData.pin || '');
+      
+      if (customerData.age) {
+        setAge(customerData.age.toString());
+      }
+      
+      // Get purchase history for this customer's mobile number
+      console.log('Fetching purchase history for mobile:', mobileNo);
+      const history = await getCustomerPurchaseHistory(mobileNo);
+      console.log('Purchase history:', history);
+      
+      // Set customer purchase history for the history table
+      setCustomerPurchaseHistory(history);
+      
+      // Auto-populate billing items with recent purchases
+      if (history.length > 0) {
+        console.log('Populating billing items with history');
+        try {
+          const populatedItems = [];
+          let itemCount = 0;
+          const maxItems = 3; // Maximum number of items to show initially
+          
+          // Process each history item
+          for (const purchase of history) {
+            if (itemCount >= maxItems) break;
+            
+            console.log(`Processing purchase:`, purchase);
+            
+            // Log the full purchase object for debugging
+            console.log('Processing purchase details:', JSON.parse(JSON.stringify(purchase)));
+            
+            // Handle order items (from order table)
+            if (purchase.type === 'order') {
+              // If we have _originalItem, it's an order item
+              if (purchase._originalItem) {
+                const item = purchase._originalItem;
+                const itemName = item.item_name || item.lens_type || item.product_name || 'Order Item';
+                const itemCode = item.item_code || item.product_code || `ITEM-${itemCount}`;
+                const orderNo = purchase.referenceNo || purchase.order_no || `ORDER-${purchase.id}`;
+                const rate = item.rate || item.unit_price || 0;
+                const quantity = item.quantity || 1;
+                const taxPercent = item.tax_percent || 0;
+                const discountPercent = typeof item.discount_percent === 'number' ? item.discount_percent : parseFloat(item.discount_percent || '0');
+                const discountAmount = typeof item.discount_amount === 'number' ? item.discount_amount : parseFloat(item.discount_amount || '0');
+                const amount = item.amount || (rate * quantity);
+                
+                populatedItems.push({
+                  id: `order_${purchase.id}_${item.id || itemCount}`,
+                  selected: false,
+                  itemCode: itemCode,
+                  itemName: itemName,
+                  orderNo: orderNo,
+                  rate: rate.toFixed(2),
+                  taxPercent: taxPercent.toFixed(2),
+                  quantity: quantity.toString(),
+                  amount: amount.toFixed(2),
+                  discount: discountAmount.toFixed(2),
+                  discountPercent: discountPercent.toFixed(2),
+                  _originalPurchase: {
+                    ...purchase,
+                    // Ensure we preserve the original values
+                    discount_amount: typeof item.discount_amount === 'number' ? item.discount_amount : parseFloat(item.discount_amount || '0'),
+                    discount_percent: typeof item.discount_percent === 'number' ? item.discount_percent : parseFloat(item.discount_percent || '0'),
+                    rate: item.rate || 0,
+                    amount: item.amount || 0,
+                    tax_percent: item.tax_percent || 0,
+                    quantity: item.quantity || 1,
+                    item_name: item.item_name || itemName,
+                    item_code: item.item_code || `ITEM-${itemCount}`
+                  }
+                });
+                itemCount++;
+              }
+              // If we have order_items array, process each item
+              else if (purchase._originalPurchase?.order_items) {
+                for (const item of purchase._originalPurchase.order_items) {
+                  if (itemCount >= maxItems) break;
+                  
+                  const itemName = item.item_name || 
+                                 (item.lens_type ? `${item.lens_type} Lenses` : 'Order Item');
+                  
+                  populatedItems.push({
+                    id: `${purchase.id}_${item.id || itemCount}`,
+                    selected: false,
+                    itemCode: item.item_code || `ITEM-${itemCount}`,
+                    itemName: itemName,
+                    orderNo: purchase.referenceNo || purchase.order_no || `ORDER-${purchase.id}`,
+                    rate: (item.rate || 0).toFixed(2),
+                    taxPercent: (item.tax_percent || 0).toFixed(2),
+                    quantity: (item.quantity || 1).toString(),
+                    amount: (item.amount || 0).toFixed(2),
+                    discount: (typeof item.discount_amount === 'number' ? item.discount_amount : parseFloat(item.discount_amount || '0')).toFixed(2),
+                    discountPercent: (typeof item.discount_percent === 'number' ? item.discount_percent : parseFloat(item.discount_percent || '0')).toFixed(2),
+                    _originalPurchase: {
+                      ...purchase,
+                      ...item,
+                      // Ensure we preserve the original values
+                      discount_amount: typeof item.discount_amount === 'number' ? item.discount_amount : parseFloat(item.discount_amount || '0'),
+                      discount_percent: typeof item.discount_percent === 'number' ? item.discount_percent : parseFloat(item.discount_percent || '0'),
+                      rate: item.rate || 0,
+                      amount: item.amount || 0,
+                      tax_percent: item.tax_percent || 0,
+                      quantity: item.quantity || 1,
+                      item_name: item.item_name || itemName,
+                      item_code: item.item_code || `ITEM-${itemCount}`
+                    }
+                  });
+                  itemCount++;
+                }
+              }
+            } 
+            // Handle contact lens items
+            else if (purchase.type === 'contact_lens' || purchase.sourceType === 'contact_lens' || 
+                    (purchase._originalPurchase?.contact_lens_items?.length > 0)) {
+              const items = purchase.items || purchase._originalPurchase?.contact_lens_items || [];
+              
+              for (const item of items) {
+                if (itemCount >= maxItems) break;
+                
+                // Map contact lens side from database to UI values
+                const side = item.eye_side === 'Right' ? 'RE' : 
+                            item.eye_side === 'Left' ? 'LE' : '';
+                
+                // Get all relevant fields with fallbacks
+                const brand = item.brand || item.brand_name || '';
+                const material = item.material || '';
+                const power = item.power || item.sph || '';
+                const baseCurve = item.base_curve || item.bc || '';
+                const diameter = item.diameter || item.dia || '';
+                const quantity = item.quantity || 1;
+                const rate = item.rate || item.unit_price || 0;
+                const taxPercent = item.tax_percent || 0;
+                const discountPercent = typeof item.discount_percent === 'number' ? item.discount_percent : parseFloat(item.discount_percent || '0');
+                const discountAmount = typeof item.discount_amount === 'number' ? item.discount_amount : parseFloat(item.discount_amount || '0');
+                const amount = item.amount || (rate * quantity) || 0;
+                
+                // Build a descriptive name for contact lenses
+                const itemName = [
+                  brand || 'Contact Lens',
+                  material,
+                  power,
+                  side,
+                  baseCurve ? `BC:${baseCurve}` : '',
+                  diameter ? `DIA:${diameter}` : ''
+                ].filter(Boolean).join(' ').trim();
+                
+                populatedItems.push({
+                  id: `cl_${purchase.id}_${item.id || itemCount}`,
+                  selected: false,
+                  itemCode: item.item_code || `CL-${item.id || itemCount}`,
+                  itemName: itemName || 'Contact Lens',
+                  orderNo: purchase.prescription_no || purchase.referenceNo || `CL-${purchase.id}`,
+                  rate: (item.rate || 0).toString(),
+                  taxPercent: (item.tax_percent || 0).toString(),
+                  quantity: (item.quantity || 1).toString(),
+                  amount: amount.toString(),
+                  discount: (typeof item.discount_amount === 'number' ? item.discount_amount : parseFloat(item.discount_amount || '0')).toFixed(2),
+                  discountPercent: (typeof item.discount_percent === 'number' ? item.discount_percent : parseFloat(item.discount_percent || '0')).toFixed(2),
+                  _originalPurchase: { 
+                    ...purchase, 
+                    ...item,
+                    // Ensure we preserve the original discount values
+                    discount_amount: typeof item.discount_amount === 'number' ? item.discount_amount : parseFloat(item.discount_amount || '0'),
+                    discount_percent: typeof item.discount_percent === 'number' ? item.discount_percent : parseFloat(item.discount_percent || '0'),
+                    // Ensure we have all required fields for contact lens items
+                    brand: item.brand,
+                    material: item.material,
+                    power: item.power,
+                    base_curve: item.base_curve,
+                    diameter: item.diameter,
+                    quantity: item.quantity || 1,
+                    rate: item.rate || 0,
+                    amount: item.amount || 0
+                  }
+                });
+                itemCount++;
+              }
+            } 
+            // Handle prescription items
+            else if (purchase.type === 'prescription' || purchase.sourceType === 'prescription') {
+              const identifier = purchase.prescription_no || purchase.referenceNo || `RX-${purchase.id}`;
+              const amount = purchase.amount || purchase.total_amount || 0;
+              const discountAmount = purchase.discount_amount || 0;
+              const discountPercent = purchase.discount_percent || 0;
+              const prescriptionType = purchase.prescription_type || 'Eye Examination';
+              
+              // Include all prescription details in the item name
+              const itemName = [
+                prescriptionType,
+                purchase.vision_type ? `(${purchase.vision_type})` : ''
+              ].filter(Boolean).join(' ').trim();
+              
+              populatedItems.push({
+                id: `rx_${purchase.id}`,
+                selected: false,
+                itemCode: identifier,
+                itemName: itemName,
+                orderNo: identifier,
+                rate: amount.toFixed(2),
+                taxPercent: '0',
+                quantity: '1',
+                amount: amount.toFixed(2),
+                discount: discountAmount.toFixed(2),
+                discountPercent: discountPercent.toFixed(2),
+                _originalPurchase: {
+                  ...purchase,
+                  // Include all relevant prescription details
+                  prescription_type: prescriptionType,
+                  vision_type: purchase.vision_type,
+                  // Ensure we have all financial fields
+                  amount: amount,
+                  discount_amount: discountAmount,
+                  discount_percent: discountPercent
+                }
+              });
+              itemCount++;
+            }
+          }
+          
+          // No need to fill empty rows, just use the populated items
+          
+          console.log('Final billing items to set:', populatedItems);
+          setBillingItems(populatedItems);
+        } catch (error) {
+          console.error('Error populating billing items:', error);
+          // Return empty array if there's an error
+          setBillingItems([]);
+        }
+      }
+    } catch (error) {
+      console.error('Error handling customer selection:', error);
+    } finally {
+      setIsLoadingCustomer(false);
+    }
+  };
+  
   // Payment details
   const [estimate, setEstimate] = useState('');
   const [schDisc, setSchDisc] = useState('');
@@ -57,19 +386,14 @@ const BillingPage: React.FC = () => {
   const [ccUpiType, setCcUpiType] = useState('');
   const [cheque, setCheque] = useState('0');
   
-  // Billing table state
-  const [billingItems, setBillingItems] = useState<BillingItem[]>([
-    { id: 1, selected: false, itemCode: '', rate: '', taxPercent: '', quantity: '', amount: '', itemName: '', orderNo: '', discount: '', discountPercent: '' },
-    { id: 2, selected: false, itemCode: '', rate: '', taxPercent: '', quantity: '', amount: '', itemName: '', orderNo: '', discount: '', discountPercent: '' },
-    { id: 3, selected: false, itemCode: '', rate: '', taxPercent: '', quantity: '', amount: '', itemName: '', orderNo: '', discount: '', discountPercent: '' }
-  ]);
+  // Billing table state (initialized in useEffect above)
   const [discountToApply, setDiscountToApply] = useState('');
   
   const jobTypes = ['OrderCard', 'Contact lens', 'Repairing', 'Others'];
   const namePrefixOptions = ['Mr.', 'Mrs.', 'Ms.'];
   
   // Handle checkbox selection change
-  const handleSelectionChange = (id: number) => {
+  const handleSelectionChange = (id: string) => {
     setBillingItems(prevItems => 
       prevItems.map(item => 
         item.id === id ? { ...item, selected: !item.selected } : item
@@ -78,28 +402,23 @@ const BillingPage: React.FC = () => {
   };
 
   // Handle item field changes
-  const handleItemChange = (id: number, field: keyof BillingItem, value: string) => {
+  const handleItemChange = (id: string, field: keyof BillingItem, value: string) => {
     setBillingItems(prevItems => 
-      prevItems.map(item => 
-        item.id === id ? { ...item, [field]: value } : item
-      )
-    );
-    
-    // If quantity or rate changes, calculate amount
-    if (field === 'quantity' || field === 'rate') {
-      const itemToUpdate = billingItems.find(item => item.id === id);
-      if (itemToUpdate) {
-        const quantity = field === 'quantity' ? parseFloat(value) || 0 : parseFloat(itemToUpdate.quantity) || 0;
-        const rate = field === 'rate' ? parseFloat(value) || 0 : parseFloat(itemToUpdate.rate) || 0;
-        const amount = (quantity * rate).toFixed(2);
+      prevItems.map(item => {
+        if (item.id !== id) return item;
         
-        setBillingItems(prevItems => 
-          prevItems.map(item => 
-            item.id === id ? { ...item, amount } : item
-          )
-        );
-      }
-    }
+        const updatedItem = { ...item, [field]: value };
+        
+        // If quantity or rate changes, calculate amount
+        if ((field === 'quantity' || field === 'rate') && updatedItem.quantity && updatedItem.rate) {
+          const quantity = parseFloat(updatedItem.quantity) || 0;
+          const rate = parseFloat(updatedItem.rate) || 0;
+          updatedItem.amount = (quantity * rate).toFixed(2);
+        }
+        
+        return updatedItem;
+      })
+    );
   };
 
   // Delete selected items
@@ -109,10 +428,6 @@ const BillingPage: React.FC = () => {
     if (hasSelectedItems) {
       setBillingItems(prevItems => {
         const remainingItems = prevItems.filter(item => !item.selected);
-        // Always keep at least one empty row
-        if (remainingItems.length === 0) {
-          return [{ id: Date.now(), selected: false, itemCode: '', rate: '', taxPercent: '', quantity: '', amount: '', itemName: '', orderNo: '', discount: '', discountPercent: '' }];
-        }
         return remainingItems;
       });
     }
@@ -120,10 +435,28 @@ const BillingPage: React.FC = () => {
 
   // Add new empty row
   const handleAddRow = () => {
-    setBillingItems(prevItems => [
-      ...prevItems,
-      { id: Date.now(), selected: false, itemCode: '', rate: '', taxPercent: '', quantity: '', amount: '', itemName: '', orderNo: '', discount: '', discountPercent: '' }
-    ]);
+    const newItem = {
+      id: Date.now().toString(),
+      selected: false,
+      itemCode: '',
+      itemName: '',
+      orderNo: '',
+      rate: '0',
+      taxPercent: '0',
+      quantity: '1',
+      amount: '0',
+      discount: '0',
+      discountPercent: '0',
+      _originalPurchase: null
+    };
+    
+    // If there are no items, just add one empty row
+    if (billingItems.length === 0) {
+      setBillingItems([newItem]);
+    } else {
+      // Otherwise add the new row after the last item
+      setBillingItems([...billingItems, newItem]);
+    }
   };
 
   // Apply same discount percentage to all items
@@ -329,6 +662,124 @@ const BillingPage: React.FC = () => {
             {/* Right Side - Personal Information */}
             <div className="w-1/2 pl-3">
               <div className="mb-3">
+                {/* Customer Search Section */}
+                <div className="p-2 bg-white border border-gray-300">
+                  <h3 className="text-sm font-medium text-gray-700 mb-2">Customer Search</h3>
+                  <CustomerSearch onSelectCustomer={handleCustomerSelect} />
+                  
+                  {isLoadingCustomer && (
+                    <div className="text-sm text-gray-500 mt-2">Loading customer data...</div>
+                  )}
+                  
+                  {customerPurchaseHistory.length > 0 && (
+                    <div className="mt-4">
+                      <h4 className="text-xs font-medium text-gray-700 mb-1">Recent Purchases:</h4>
+                      <div className="max-h-32 overflow-y-auto border rounded text-xs">
+                        <table className="min-w-full">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-2 py-1 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                              <th className="px-2 py-1 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                              <th className="px-2 py-1 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ref No</th>
+                              <th className="px-2 py-1 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {customerPurchaseHistory.slice(0, 5).map((purchase, index) => (
+                              <tr key={index} className="hover:bg-gray-50">
+                                <td className="px-2 py-1 whitespace-nowrap text-xs text-gray-900">
+                                  {new Date(purchase.date).toLocaleDateString()}
+                                </td>
+                                <td className="px-2 py-1 whitespace-nowrap text-xs text-gray-500 capitalize">
+                                  {purchase.type}
+                                </td>
+                                <td className="px-2 py-1 whitespace-nowrap text-xs text-gray-500">
+                                  {purchase.prescription_no || purchase.order_no || 'N/A'}
+                                </td>
+                                <td className="px-2 py-1 whitespace-nowrap text-xs text-gray-900 text-right">
+                                  {purchase.total_amount ? `₹${Number(purchase.total_amount).toFixed(2)}` : 'N/A'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Bill Details Section */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-2 bg-white border border-gray-300">
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700">Date</label>
+                      <input
+                        type="text"
+                        value={currentDate}
+                        readOnly
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700">Job Type</label>
+                      <select
+                        value={jobType}
+                        onChange={(e) => setJobType(e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      >
+                        <option value="">Select Job Type</option>
+                        {jobTypes.map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700">Time</label>
+                      <input
+                        type="text"
+                        value={currentTime}
+                        readOnly
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700">Booking By</label>
+                      <input
+                        type="text"
+                        value={bookingBy}
+                        onChange={(e) => setBookingBy(e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700">Item Name</label>
+                      <input
+                        type="text"
+                        value={itemName}
+                        onChange={(e) => setItemName(e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700">Presc. By</label>
+                      <input
+                        type="text"
+                        value={prescBy}
+                        onChange={(e) => setPrescBy(e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 <div className="flex">
                   <div className="w-1/6">
                     <label className="block text-sm mb-1">Name<span className="text-red-500">*</span></label>
